@@ -1,8 +1,14 @@
 # exopy
 
-Programmatic level builder, decompiler, and source-protection toolkit for **Exoracer** (`.exolvl`).
+​A toolkit for building, decompiling, and protecting **Exoracer** (`.exolvl`) levels with python.
 
 ## Installation
 
 ```bash
-pip install .
+pip install exopython
+```
+
+## Todo
+- [ ] update `README.md` to be useful (someone do that)
+- [ ] improvements
+
