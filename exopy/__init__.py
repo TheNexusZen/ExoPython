@@ -113,7 +113,7 @@ class GameObject:
 
 
 class ExoLevel:
-    def __init__(self, name, bg_type="Mountains", laps=1, gravity=(0.0, -75.0), settings=None):
+    def __init__(self, name, bg_type="Mountains", laps=1, gravity=(0.0, -74.0), settings=None):
         tk = str(bg_type).strip().lower()
         if tk not in THEMES:
             raise ValueError("bg_type must be Mountains, Halloween, Christmas, or Custom")
@@ -250,7 +250,7 @@ class ExoLevel:
         return filepath
 
 
-def init(name, bg_type="Mountains", laps=1, gravity=(0.0, -75.0), settings=None):
+def init(name, bg_type="Mountains", laps=1, gravity=(0.0, -74.0), settings=None):
     _state.active_level = ExoLevel(name, bg_type, laps, gravity, settings)
     return _state.active_level
 
