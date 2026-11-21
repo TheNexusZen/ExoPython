@@ -1,4 +1,4 @@
-# ExoPython (`exopy`)
+# ExoPython (`exopython`)
 
 Write Exoracer levels in Python.
 
@@ -13,7 +13,7 @@ pip install exopython
 ## Make a Level
 
 ```python
-import exopy as exo
+import exopython as exo
 
 lvl = exo.init("My First Level", bg_type="Mountains", gravity=(0.0, -74.0))
 
@@ -33,8 +33,8 @@ Run the script, import the level into Exoracer, and play.
 Use `exoscript` for actions and `exovar` for variables:
 
 ```python
-import exopy as exo
-from exopy import scripts as exoscript, variables as exovar
+import exopython as exo
+from exopython import scripts as exoscript, variables as exovar
 
 lvl = exo.init("Moving Platform")
 
@@ -62,7 +62,7 @@ lvl.export("moving_platform.exolvl")
 Turn an existing `.exolvl` back into Python:
 
 ```python
-import exopy as exo
+import exopython as exo
 
 exo.decompile("my_level.exolvl", out_py="my_level.py")
 ```
