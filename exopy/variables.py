@@ -99,23 +99,40 @@ class NovaValue:
             DynamicType.StringObjectTag, DynamicType.StringSubstring,
         )
 
+    def _is_v(self):
+        return (103 <= self.dynamic_type <= 118) or self.dynamic_type in (
+            168, 169, 170, 171, 173, 180, 186, 187, DynamicType.VectorParameter
+        )
+
     def __add__(self, o):
         o = as_nova(o)
         if self._is_s() or o._is_s():
             return NovaValue.expr(DynamicType.StringConcat, self, o)
+        if self._is_v() or o._is_v():
+            return NovaValue.expr(DynamicType.VectorAdd, self, o)
         return NovaValue.expr(DynamicType.FloatAdd if (self._is_f() or o._is_f()) else DynamicType.IntAdd, self, o)
 
     def __sub__(self, o):
         o = as_nova(o)
+        if self._is_v() or o._is_v():
+            return NovaValue.expr(DynamicType.VectorSubtract, self, o)
         return NovaValue.expr(DynamicType.FloatSubtract if (self._is_f() or o._is_f()) else DynamicType.IntSubtract, self, o)
 
     def __mul__(self, o):
         o = as_nova(o)
+        if self._is_v():
+            return NovaValue.expr(DynamicType.VectorMultiply, self, as_float_nova(o))
         return NovaValue.expr(DynamicType.FloatMultiply if (self._is_f() or o._is_f()) else DynamicType.IntMultiply, self, o)
 
     def __truediv__(self, o):
         o = as_nova(o)
+        if self._is_v():
+            return NovaValue.expr(DynamicType.VectorDivide, self, as_float_nova(o))
         return NovaValue.expr(DynamicType.FloatDivide if (self._is_f() or o._is_f()) else DynamicType.IntDivide, self, o)
+
+    def __mod__(self, o):
+        o = as_nova(o)
+        return NovaValue.expr(DynamicType.FloatModulo if (self._is_f() or o._is_f()) else DynamicType.IntModulo, self, o)
 
     def __lt__(self, o): return NovaValue.expr(DynamicType.BoolLess, self, as_nova(o))
     def __le__(self, o): return NovaValue.expr(DynamicType.BoolLessOrEqual, self, as_nova(o))
@@ -141,6 +158,7 @@ class _ExprMixin:
     def __sub__(self, o): return self.ref() - o
     def __mul__(self, o): return self.ref() * o
     def __truediv__(self, o): return self.ref() / o
+    def __mod__(self, o): return self.ref() % o
     def __lt__(self, o): return self.ref() < o
     def __le__(self, o): return self.ref() <= o
     def __gt__(self, o): return self.ref() > o
@@ -188,6 +206,8 @@ def as_nova(val):
     if isinstance(val, str):
         return NovaValue.color(val) if (val.startswith("#") and len(val) in (7, 9)) else NovaValue.string(val)
     if hasattr(val, "entity_id"): return NovaValue.object(val)
+    if hasattr(val, "layer_id"): return NovaValue.layer(val)
+    if hasattr(val, "script_id"): return NovaValue.script(val)
     if isinstance(val, (tuple, list)):
         if len(val) == 2 and all(isinstance(x, (int, float)) for x in val): return NovaValue.vector(val)
         if len(val) == 4 and all(isinstance(x, (int, float)) for x in val): return NovaValue.color(val)
@@ -312,20 +332,178 @@ def return_reg(stype: int) -> Variable:
     return lvl._return_regs[st]
 
 
+# --- Player & Input Queries ---
 def player(): return NovaValue(DynamicType.ObjectPlayer)
 def players(): return NovaValue(DynamicType.ObjectSetPlayers)
-def tag(name): return NovaValue.expr(DynamicType.ObjectSetObjectsWithTag, NovaValue.string(name))
-def obj_pos(obj): return NovaValue.expr(DynamicType.VectorObjectPos, obj)
-def obj_global_pos(obj): return NovaValue.expr(DynamicType.VectorObjectGlobalPos, obj)
+def player_on_ground(): return NovaValue(DynamicType.BoolPlayerOnGround)
+def player_on_walljump(): return NovaValue(DynamicType.BoolPlayerOnWalljump)
+def player_on_booster(): return NovaValue(DynamicType.BoolPlayerOnBooster)
+def player_on_swing(): return NovaValue(DynamicType.BoolPlayerOnSwing)
+def player_in_floating_zone(): return NovaValue(DynamicType.BoolPlayerInFloatingZone)
+def player_using_glider(): return NovaValue(DynamicType.BoolPlayerUsingGlider)
+def player_jump_locked(): return NovaValue(DynamicType.BoolPlayerJumpLocked)
+
+def input_pressed(): return NovaValue(DynamicType.BoolInputPressed)
+def input_pressed_left(): return NovaValue(DynamicType.BoolInputPressedLeft)
+def input_pressed_right(): return NovaValue(DynamicType.BoolInputPressedRight)
+def input_held(): return NovaValue(DynamicType.BoolInputHeld)
+def input_held_left(): return NovaValue(DynamicType.BoolInputHeldLeft)
+def input_held_right(): return NovaValue(DynamicType.BoolInputHeldRight)
+def input_released(): return NovaValue(DynamicType.BoolInputReleased)
+def input_released_left(): return NovaValue(DynamicType.BoolInputReleasedLeft)
+def input_released_right(): return NovaValue(DynamicType.BoolInputReleasedRight)
+
+def pointer_pos(): return NovaValue(DynamicType.VectorPointerPosition)
 def pointer_world_pos(): return NovaValue(DynamicType.VectorPointerWorldPosition)
 def pointer_down(): return NovaValue(DynamicType.BoolPointerDown)
 def pointer_held(): return NovaValue(DynamicType.BoolPointerHeld)
-def distance(a, b): return NovaValue.expr(DynamicType.FloatVectorDistance, a, b)
+def pointer_released(): return NovaValue(DynamicType.BoolPointerReleased)
+
+
+# --- Object & ObjectSet Queries ---
+def tag(name): return NovaValue.expr(DynamicType.ObjectSetObjectsWithTag, NovaValue.string(name))
+def all_objects(): return NovaValue(DynamicType.ObjectSetAllObjects)
+def objects_in_layer(layer): return NovaValue.expr(DynamicType.ObjectSetObjectsInLayer, layer)
+def objects_in_circle(center, radius): return NovaValue.expr(DynamicType.ObjectSetObjectsInCircle, center, as_float_nova(radius))
+def set_concat(a, b): return NovaValue.expr(DynamicType.ObjectSetConcat, as_object_set(a), as_object_set(b))
+def set_union(a, b): return NovaValue.expr(DynamicType.ObjectSetUnion, as_object_set(a), as_object_set(b))
+def set_intersection(a, b): return NovaValue.expr(DynamicType.ObjectSetIntersection, as_object_set(a), as_object_set(b))
+def set_difference(a, b): return NovaValue.expr(DynamicType.ObjectSetDifference, as_object_set(a), as_object_set(b))
+def set_remove_at(s, index): return NovaValue.expr(DynamicType.ObjectSetRemoveAtIndex, as_object_set(s), index)
+def set_count(s): return NovaValue.expr(DynamicType.IntObjectSetCount, as_object_set(s))
+def set_children(obj): return NovaValue.expr(DynamicType.ObjectSetChildren, obj)
+
+def any_object(s): return NovaValue.expr(DynamicType.ObjectAnyObject, as_object_set(s))
+def first_from_set(s): return NovaValue.expr(DynamicType.ObjectFirstFromSet, as_object_set(s))
+def random_from_set(s): return NovaValue.expr(DynamicType.ObjectRandomFromSet, as_object_set(s))
+def element_from_set(s, index): return NovaValue.expr(DynamicType.ObjectElementFromSet, as_object_set(s), index)
+def source_object(): return NovaValue(DynamicType.ObjectSourceObject)
+def collided_object(): return NovaValue(DynamicType.ObjectCollidedObject)
+def target_object(): return NovaValue(DynamicType.ObjectTargetObject)
+def repeat_object(): return NovaValue(DynamicType.ObjectRepeatObject)
+def parent_object(obj): return NovaValue.expr(DynamicType.ObjectParent, obj)
+
+def obj_pos(obj): return NovaValue.expr(DynamicType.VectorObjectPos, obj)
+def obj_global_pos(obj): return NovaValue.expr(DynamicType.VectorObjectGlobalPos, obj)
+def obj_scale(obj): return NovaValue.expr(DynamicType.VectorObjectScale, obj)
+def obj_global_scale(obj): return NovaValue.expr(DynamicType.VectorObjectGlobalScale, obj)
+def obj_velocity(obj): return NovaValue.expr(DynamicType.VectorObjectVelocity, obj)
+def obj_rotation(obj): return NovaValue.expr(DynamicType.FloatObjectRotation, obj)
+def obj_global_rotation(obj): return NovaValue.expr(DynamicType.FloatObjectGlobalRotation, obj)
+def obj_direction(obj): return NovaValue.expr(DynamicType.IntObjectDirection, obj)
+def obj_color(obj): return NovaValue.expr(DynamicType.ColorObjectColor, obj)
+def obj_tag(obj): return NovaValue.expr(DynamicType.StringObjectTag, obj)
+def obj_dead(obj): return NovaValue.expr(DynamicType.BoolObjectDead, obj)
+def obj_activated(obj): return NovaValue.expr(DynamicType.BoolObjectActivated, obj)
+def objects_colliding(a, b): return NovaValue.expr(DynamicType.BoolObjectsColliding, a, b)
+def colliding_with_point(obj, point): return NovaValue.expr(DynamicType.BoolObjectsCollidingWithPoint, obj, point)
+def collision_point(a, b): return NovaValue.expr(DynamicType.VectorCollisionPoint, a, b)
+def collision_normal(a, b): return NovaValue.expr(DynamicType.VectorCollisionNormal, a, b)
+def closest_from_point(s, point): return NovaValue.expr(DynamicType.VectorClosestFromPoint, as_object_set(s), point)
+
+
+# --- Math, Trigonometry & Vectors ---
+def abs_(x):
+    nx = as_nova(x)
+    return NovaValue.expr(DynamicType.FloatAbs if nx._is_f() else DynamicType.IntAbs, nx)
+
+def sign(x):
+    nx = as_nova(x)
+    return NovaValue.expr(DynamicType.FloatSign if nx._is_f() else DynamicType.IntSign, nx)
+
+def min_(a, b):
+    na, nb = as_nova(a), as_nova(b)
+    return NovaValue.expr(DynamicType.FloatMin if (na._is_f() or nb._is_f()) else DynamicType.IntMin, na, nb)
+
+def max_(a, b):
+    na, nb = as_nova(a), as_nova(b)
+    return NovaValue.expr(DynamicType.FloatMax if (na._is_f() or nb._is_f()) else DynamicType.IntMax, na, nb)
+
+def round_(x, to_int=False):
+    return NovaValue.expr(DynamicType.IntRound if to_int else DynamicType.FloatRound, as_float_nova(x))
+
+def ceil(x, to_int=False):
+    return NovaValue.expr(DynamicType.IntCeil if to_int else DynamicType.FloatCeil, as_float_nova(x))
+
+def floor(x, to_int=False):
+    return NovaValue.expr(DynamicType.IntFloor if to_int else DynamicType.FloatFloor, as_float_nova(x))
+
+def round_decimals(x, decimals): return NovaValue.expr(DynamicType.FloatRoundDecimals, as_float_nova(x), decimals)
+def sin(x): return NovaValue.expr(DynamicType.FloatSin, as_float_nova(x))
+def cos(x): return NovaValue.expr(DynamicType.FloatCos, as_float_nova(x))
+def tan(x): return NovaValue.expr(DynamicType.FloatTan, as_float_nova(x))
+def asin(x): return NovaValue.expr(DynamicType.FloatAsin, as_float_nova(x))
+def acos(x): return NovaValue.expr(DynamicType.FloatAcos, as_float_nova(x))
+def atan(x): return NovaValue.expr(DynamicType.FloatAtan, as_float_nova(x))
+def sqrt(x): return NovaValue.expr(DynamicType.FloatSqrt, as_float_nova(x))
+def pow_(base, exp): return NovaValue.expr(DynamicType.FloatPow, as_float_nova(base), as_float_nova(exp))
 def random_int(lo, hi): return NovaValue.expr(DynamicType.IntRandom, int(lo), int(hi))
-def to_str(val): return NovaValue.expr(DynamicType.StringFromInt, val)
-def concat(a, b): return NovaValue.expr(DynamicType.StringConcat, NovaValue.string(a) if isinstance(a, str) else a, NovaValue.string(b) if isinstance(b, str) else b)
+def random_float(lo=0.0, hi=1.0): return NovaValue.expr(DynamicType.FloatRandom, as_float_nova(lo), as_float_nova(hi))
+
+def vec_values(x, y): return NovaValue.expr(DynamicType.VectorValues, as_float_nova(x), as_float_nova(y))
+def vec_x(v): return NovaValue.expr(DynamicType.FloatVectorX, v)
+def vec_y(v): return NovaValue.expr(DynamicType.FloatVectorY, v)
+def vec_length(v): return NovaValue.expr(DynamicType.FloatVectorLength, v)
+def vec_length_sqr(v): return NovaValue.expr(DynamicType.FloatVectorLengthSqr, v)
+def distance(a, b): return NovaValue.expr(DynamicType.FloatVectorDistance, a, b)
+def distance_sqr(a, b): return NovaValue.expr(DynamicType.FloatVectorDistanceSqr, a, b)
+def vec_dot(a, b): return NovaValue.expr(DynamicType.FloatVectorDot, a, b)
+def vec_angle(v): return NovaValue.expr(DynamicType.FloatVectorAngle, v)
+def vec_angle_between(a, b): return NovaValue.expr(DynamicType.FloatVectorAngleBetween, a, b)
+def vec_normalize(v): return NovaValue.expr(DynamicType.VectorNormalize, v)
+def vec_perpendicular(v): return NovaValue.expr(DynamicType.VectorPerpendicular, v)
+def vec_reflect(v, normal): return NovaValue.expr(DynamicType.VectorReflect, v, normal)
+def vec_rotate(v, angle): return NovaValue.expr(DynamicType.VectorRotate, v, as_float_nova(angle))
+
+
+# --- Colors, Strings, Time & Camera ---
+def color_values(r, g, b, a=1.0):
+    return NovaValue.expr(DynamicType.ColorValues, as_float_nova(r), as_float_nova(g), as_float_nova(b), as_float_nova(a))
+
+def color_r(c): return NovaValue.expr(DynamicType.FloatColorR, c)
+def color_g(c): return NovaValue.expr(DynamicType.FloatColorG, c)
+def color_b(c): return NovaValue.expr(DynamicType.FloatColorB, c)
+def color_a(c): return NovaValue.expr(DynamicType.FloatColorA, c)
+
+def to_str(val):
+    nv = as_nova(val)
+    return NovaValue.expr(DynamicType.StringFromFloat if nv._is_f() else DynamicType.StringFromInt, nv)
+
+def concat(a, b):
+    return NovaValue.expr(
+        DynamicType.StringConcat,
+        NovaValue.string(a) if isinstance(a, str) else a,
+        NovaValue.string(b) if isinstance(b, str) else b,
+    )
+
+def substring(s, start, length): return NovaValue.expr(DynamicType.StringSubstring, s, start, length)
+def str_length(s): return NovaValue.expr(DynamicType.IntStringLength, s)
+
+def level_time(): return NovaValue(DynamicType.FloatLevelTime)
+def world_time(): return NovaValue(DynamicType.FloatTime)
+def repeat_count(): return NovaValue(DynamicType.IntRepeatCount)
+def damage_amount(): return NovaValue(DynamicType.FloatDamageAmount)
+def last_sound_instance(): return NovaValue(DynamicType.IntLastSoundInstance)
+def camera_pos(): return NovaValue(DynamicType.VectorCameraPos)
+def camera_viewport_size(): return NovaValue(DynamicType.FloatCameraViewportSize)
+
+
+# --- Boolean Logic & Comparisons ---
 def not_(cond): return NovaValue.expr(DynamicType.BoolNot, cond)
 def and_(a, b): return NovaValue.expr(DynamicType.BoolAnd, a, b)
 def or_(a, b): return NovaValue.expr(DynamicType.BoolOr, a, b)
+def eq_bool(a, b): return NovaValue.expr(DynamicType.BoolEqualBool, a, b)
+def eq_str(a, b): return NovaValue.expr(DynamicType.BoolEqualString, a, b)
+def eq_color(a, b): return NovaValue.expr(DynamicType.BoolEqualColor, a, b)
+def eq_vec(a, b): return NovaValue.expr(DynamicType.BoolEqualVector, a, b)
+def eq_obj(a, b): return NovaValue.expr(DynamicType.BoolEqualObject, a, b)
+def ne_bool(a, b): return NovaValue.expr(DynamicType.BoolNotEqualBool, a, b)
+def ne_str(a, b): return NovaValue.expr(DynamicType.BoolNotEqualString, a, b)
+def ne_color(a, b): return NovaValue.expr(DynamicType.BoolNotEqualColor, a, b)
+def ne_vec(a, b): return NovaValue.expr(DynamicType.BoolNotEqualVector, a, b)
+def ne_obj(a, b): return NovaValue.expr(DynamicType.BoolNotEqualObject, a, b)
+
+
+# --- Raw Fallbacks ---
 def value(dynamic_type: int, **kwargs): return NovaValue(dynamic_type, **kwargs)
 def object_set(objs): return NovaValue.object_set(objs)
