@@ -7,8 +7,13 @@ import sys
 from . import _state
 from .binary import BinaryReader, rgba_to_hex
 from .constants import TILE_IDS, OBJECT_PROPERTIES
+from .errors import (
+    WrongMagicError,
+    InvalidObjectPropertyError,
+    InvalidActionTypeError,
+)
 from .types_ext import (
-    AuthorReplay, Brush, LegacyTileLayers, Pattern, Prefab, TerrainCopyStyle,
+    AuthorReplay, Brush, LegacyTileLayers, LocalLevel, Pattern, Prefab, TerrainCopyStyle,
 )
 
 _ID_TO_TILE = {v: k for k, v in TILE_IDS.items()}
@@ -89,6 +94,8 @@ def _try_box(corners):
 
 def _read_prop(r: BinaryReader):
     pid = r.i32()
+    if pid not in _ID_TO_PROP:
+        raise InvalidObjectPropertyError(pid)
     name, ptype = _ID_TO_PROP[pid]
     if ptype == "color":
         return name, rgba_to_hex(r.color())
@@ -106,7 +113,7 @@ def _read_prop(r: BinaryReader):
         return name, r.vec(r.i32)
     if ptype == "tcorners":
         return name, r.vec(lambda: r.vec(r.vec2))
-    raise KeyError(f"Unhandled property type: {ptype}")
+    raise InvalidObjectPropertyError(ptype)
 
 
 def _read_nova(r: BinaryReader, ver: int = 18) -> dict:
@@ -207,7 +214,7 @@ def _read_action(r: BinaryReader, ver: int = 18) -> dict:
     elif aid == 49:
         d = {"target": rn(), "actions": ra()}
     else:
-        raise KeyError(f"Unknown ActionID: {aid}")
+        raise InvalidActionTypeError(aid)
 
     d.update({"aid": aid, "closed": closed, "wait": wait})
     return d
@@ -256,22 +263,22 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.reset_object({_fmt_nova(a['fields'][0])})")
         elif aid == 12:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_color({f[0]}, {f[1]}, duration={f[3]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_color({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, wait={wait!r})")
         elif aid == 13:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_transparency({f[0]}, {f[1]}, duration={f[3]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_transparency({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, wait={wait!r})")
         elif aid == 14:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_secondary_color({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_secondary_color({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 15:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_secondary_transparency({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_secondary_transparency({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 16:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_border_color({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_border_color({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 17:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_border_transparency({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_border_transparency({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 18:
             lines.append(f"{indent}{target_var}.set_sprite({_fmt_nova(a['fields'][0])}, {_fmt_nova(a['fields'][1])})")
         elif aid == 19:
@@ -335,10 +342,10 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.stop_script({_fmt_nova(a['fields'][0])})")
         elif aid == 44:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.transition_in({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.transition_in({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 45:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.transition_out({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.transition_out({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 46:
             f = [_fmt_nova(x) for x in a["fields"]]
             lines.append(f"{indent}{target_var}.time_scale({f[0]}, duration={f[1]}, wait={wait!r})")
@@ -400,23 +407,25 @@ def decompile(
     gen = _state.generator_mode if generator_mode is None else bool(generator_mode)
     is_obf = bool(exopy_meta and exopy_meta.get("obfuscated"))
     r = BinaryReader(data)
-    if r.raw(4) != b"NYA^":
-        raise ValueError("Not a valid .exolvl file (missing NYA^ magic)")
+    magic = r.raw(4)
+    if magic != b"NYA^":
+        raise WrongMagicError(magic)
 
-    ver = r.i32()
-    uid = r.string()
-    lver = r.i32()
-    name = r.string()
-    thumb = r.string()
-    r.i64()
-    r.i64()
-    author_ms = r.i64()
-    author_laps = r.vec(r.i64)
-    silver_ms = r.i64()
-    gold_ms = r.i64()
-    laps = max(1, min(10, r.i32()))
-    private = r.bool()
-    nova_lvl = r.bool()
+    local_lvl = LocalLevel.read(r)
+    ver = local_lvl.serialization_version
+    uid = local_lvl.level_id
+    lver = local_lvl.level_version
+    name = local_lvl.level_name
+    thumb = local_lvl.thumbnail
+    creation_ticks = local_lvl.creation_date_ticks
+    update_ticks = local_lvl.update_date_ticks
+    author_ms = local_lvl.author_time
+    author_laps = local_lvl.author_lap_times
+    silver_ms = local_lvl.silver_medal_time
+    gold_ms = local_lvl.gold_medal_time
+    laps = max(1, min(10, local_lvl.laps))
+    private = local_lvl.private
+    nova_lvl = local_lvl.nova_level
 
     r.string()
     r.i32()
@@ -450,13 +459,11 @@ def decompile(
     layers = []
     for _ in range(r.i32()):
         lid, lname = r.i32(), r.string()
-        r.bool()
-        r.bool()
-        r.bool()
+        sel, inv, lock = r.bool(), r.bool(), r.bool()
         fg, plx = r.i32(), r.vec2()
-        r.bool()
+        fixed = r.bool()
         r.vec(r.i32)
-        layers.append((lid, lname, fg, plx))
+        layers.append((lid, lname, sel, inv, lock, fg, plx, fixed))
 
     prefabs, brushes, patterns, color_palette = [], [], [], []
     legacy_scripts, nova_scripts, global_vars = [], [], []
@@ -469,6 +476,8 @@ def decompile(
         "SerializationVersion": ver,
         "LevelVersion": lver,
         "NovaLevel": nova_lvl,
+        "CreationTicks": creation_ticks,
+        "UpdateTicks": update_ticks,
         "_ExopyDecompiled": True,
     }
     if thumb:
@@ -500,7 +509,7 @@ def decompile(
         lvl_settings["CenterCamera"] = r.bool()
         legacy_scripts = r.vec(r.i32)
         if ver >= 19:
-            r.i32()
+            lvl_settings["_V19ScriptExtra"] = r.i32()
         nova_scripts = r.vec(lambda: _read_script(r, ver))
         global_vars = r.vec(lambda: _read_var(r, ver))
 
@@ -533,10 +542,10 @@ def decompile(
 
     lines = [
         f"# Decompiled from {os.path.basename(filepath)} (format v{ver})",
-        "import exopy as exo",
-        "from exopy import scripts as exoscript",
-        "from exopy import variables as exovar",
-        "from exopy.types_ext import Brush, BrushGrid, BrushObject, Pattern, Prefab, RawObject",
+        "import exopython as exo",
+        "from exopython import scripts as exoscript",
+        "from exopython import variables as exovar",
+        "from exopython.types_ext import Brush, BrushGrid, BrushObject, Pattern, Prefab, RawObject, TerrainCopyStyle",
         "",
         f"Settings = {lvl_settings!r}",
         f"Level = exo.init({name!r}, {theme!r}, {laps}, {gravity!r}, Settings)",
@@ -546,11 +555,26 @@ def decompile(
         lines.append(f"# Note: {tail_note}")
         lines.append("")
 
-    for lid, lname, fg, plx in layers:
+    for lid, lname, sel, inv, lock, fg, plx, fixed in layers:
         if lid == 1:
+            if sel or inv or lock or fixed or fg != 0 or plx != (0.0, 0.0):
+                lines.append(
+                    f"Level.layers[0].selected, Level.layers[0].invisible, Level.layers[0].locked, "
+                    f"Level.layers[0].foreground_type, Level.layers[0].parallax, Level.layers[0].fixed_size = "
+                    f"{sel!r}, {inv!r}, {lock!r}, {fg!r}, {plx!r}, {fixed!r}"
+                )
             continue
         lines.append(f"layer_{lid} = exo.CreateLayer({lname!r}, foreground_type={fg}, parallax={plx})")
+        if sel or inv or lock or fixed:
+            lines.append(
+                f"layer_{lid}.selected, layer_{lid}.invisible, layer_{lid}.locked, layer_{lid}.fixed_size = "
+                f"{sel!r}, {inv!r}, {lock!r}, {fixed!r}"
+            )
     if len(layers) > 1:
+        lines.append("")
+
+    if terrain_style != TerrainCopyStyle():
+        lines.append(f"Level.terrain_style = {terrain_style!r}")
         lines.append("")
 
     # --- Patterns ---
