@@ -141,7 +141,20 @@ class NovaValue:
     def eq(self, o): return NovaValue.expr(DynamicType.BoolEqualNumber, self, as_nova(o))
     def ne(self, o): return NovaValue.expr(DynamicType.BoolNotEqualNumber, self, as_nova(o))
 
-    def _write_to(self, w: BinaryWriter):
+    def to_dict(self) -> dict:
+        return {
+            "dynamic_type": self.dynamic_type,
+            "bool_value": self.bool_value,
+            "int_value": self.int_value,
+            "float_value": self.float_value,
+            "string_value": self.string_value,
+            "color_value": list(self.color_value),
+            "vector_value": list(self.vector_value),
+            "int_list_value": self.int_list_value,
+            "sub_values": [v.to_dict() for v in self.sub_values] if self.sub_values is not None else None,
+        }
+
+    def _write_to(self, w: BinaryWriter, ver: int = 18):
         w.write_i32(self.dynamic_type)
         w.write_bool(self.bool_value)
         w.write_i32(self.int_value)
@@ -149,8 +162,12 @@ class NovaValue:
         w.write_option(self.string_value, w.write_str)
         w.write_color(self.color_value)
         w.write_vec2(self.vector_value)
+        if ver >= 19:
+            w.write_u8(0)
         w.write_option(self.int_list_value, lambda lst: w.write_vec(lst, w.write_i32))
-        w.write_option(self.sub_values, lambda lst: w.write_vec(lst, lambda v: v._write_to(w)))
+        w.write_option(self.sub_values, lambda lst: w.write_vec(lst, lambda v: v._write_to(w, ver)))
+        if ver >= 19:
+            w.write_raw(b"\x00\x00\x00\x00")
 
 
 class _ExprMixin:
@@ -175,11 +192,19 @@ class Variable(_ExprMixin):
     def ref(self):
         return NovaValue(_STATIC_TO_VAR_DYNAMIC[self.static_type], int_value=self.variable_id)
 
-    def _write_to(self, w: BinaryWriter):
+    def to_dict(self) -> dict:
+        return {
+            "variable_id": self.variable_id,
+            "name": self.name,
+            "static_type": self.static_type,
+            "initial_value": self.initial_value.to_dict(),
+        }
+
+    def _write_to(self, w: BinaryWriter, ver: int = 18):
         w.write_i32(self.variable_id)
         w.write_str(self.name)
         w.write_i32(self.static_type)
-        self.initial_value._write_to(w)
+        self.initial_value._write_to(w, ver)
 
 
 class Parameter(_ExprMixin):
@@ -190,11 +215,19 @@ class Parameter(_ExprMixin):
     def ref(self):
         return NovaValue(_STATIC_TO_PARAM_DYNAMIC[self.static_type], int_value=self.parameter_id)
 
-    def _write_to(self, w: BinaryWriter):
+    def to_dict(self) -> dict:
+        return {
+            "parameter_id": self.parameter_id,
+            "name": self.name,
+            "static_type": self.static_type,
+            "default_value": self.default_value.to_dict(),
+        }
+
+    def _write_to(self, w: BinaryWriter, ver: int = 18):
         w.write_i32(self.parameter_id)
         w.write_str(self.name)
         w.write_i32(self.static_type)
-        self.default_value._write_to(w)
+        self.default_value._write_to(w, ver)
 
 
 def as_nova(val):
@@ -287,8 +320,15 @@ def Float(name, value=0.0, *, is_global=True): return _reg(name, StaticType.Floa
 def String(name, value="", *, is_global=True): return _reg(name, StaticType.String, NovaValue.string(value), is_global)
 def Color(name, value="#FFFFFF", *, is_global=True): return _reg(name, StaticType.Color, NovaValue.color(value), is_global)
 def Vector(name, value=(0.0, 0.0), *, is_global=True): return _reg(name, StaticType.Vector, NovaValue.vector(value), is_global)
+def Sound(name, value="", *, is_global=True): return _reg(name, StaticType.Sound, NovaValue.sound(value), is_global)
+def Music(name, value="", *, is_global=True): return _reg(name, StaticType.Music, NovaValue.music(value), is_global)
 def Object(name, obj=0, *, is_global=True): return _reg(name, StaticType.Object, NovaValue.object(obj), is_global)
 def ObjectSet(name, objs=(), *, is_global=True): return _reg(name, StaticType.ObjectSet, NovaValue.object_set(objs), is_global)
+def Transition(name, value=0, *, is_global=True): return _reg(name, StaticType.Transition, NovaValue.transition(value), is_global)
+def Easing(name, value=0, *, is_global=True): return _reg(name, StaticType.Easing, NovaValue.easing(value), is_global)
+def Sprite(name, value="", *, is_global=True): return _reg(name, StaticType.Sprite, NovaValue.sprite(value), is_global)
+def Script(name, script=0, *, is_global=True): return _reg(name, StaticType.Script, NovaValue.script(script), is_global)
+def Layer(name, layer=1, *, is_global=True): return _reg(name, StaticType.Layer, NovaValue.layer(layer), is_global)
 
 
 HINT_TO_STATIC = {
@@ -298,8 +338,15 @@ HINT_TO_STATIC = {
     str: StaticType.String, String: StaticType.String,
     Color: StaticType.Color,
     Vector: StaticType.Vector,
+    Sound: StaticType.Sound,
+    Music: StaticType.Music,
     Object: StaticType.Object,
     ObjectSet: StaticType.ObjectSet,
+    Transition: StaticType.Transition,
+    Easing: StaticType.Easing,
+    Sprite: StaticType.Sprite,
+    Script: StaticType.Script,
+    Layer: StaticType.Layer,
 }
 
 
@@ -326,7 +373,11 @@ def return_reg(stype: int) -> Variable:
             StaticType.Bool: "_rv_bool", StaticType.Int: "_rv_int",
             StaticType.Float: "_rv_float", StaticType.String: "_rv_str",
             StaticType.Color: "_rv_color", StaticType.Vector: "_rv_vec",
+            StaticType.Sound: "_rv_sound", StaticType.Music: "_rv_music",
             StaticType.Object: "_rv_obj", StaticType.ObjectSet: "_rv_set",
+            StaticType.Transition: "_rv_trans", StaticType.Easing: "_rv_ease",
+            StaticType.Sprite: "_rv_sprite", StaticType.Script: "_rv_script",
+            StaticType.Layer: "_rv_layer",
         }
         lvl._return_regs[st] = _reg(names.get(st, f"_rv_{st}"), st, default_nova_for(st), is_global=True)
     return lvl._return_regs[st]
@@ -437,6 +488,7 @@ def acos(x): return NovaValue.expr(DynamicType.FloatAcos, as_float_nova(x))
 def atan(x): return NovaValue.expr(DynamicType.FloatAtan, as_float_nova(x))
 def sqrt(x): return NovaValue.expr(DynamicType.FloatSqrt, as_float_nova(x))
 def pow_(base, exp): return NovaValue.expr(DynamicType.FloatPow, as_float_nova(base), as_float_nova(exp))
+def semitones(x): return NovaValue.expr(DynamicType.FloatSemitones, as_float_nova(x))
 def random_int(lo, hi): return NovaValue.expr(DynamicType.IntRandom, int(lo), int(hi))
 def random_float(lo=0.0, hi=1.0): return NovaValue.expr(DynamicType.FloatRandom, as_float_nova(lo), as_float_nova(hi))
 
@@ -456,7 +508,7 @@ def vec_reflect(v, normal): return NovaValue.expr(DynamicType.VectorReflect, v, 
 def vec_rotate(v, angle): return NovaValue.expr(DynamicType.VectorRotate, v, as_float_nova(angle))
 
 
-# --- Colors, Strings, Time & Camera ---
+# --- Colors, Strings, Time, Constants & Camera ---
 def color_values(r, g, b, a=1.0):
     return NovaValue.expr(DynamicType.ColorValues, as_float_nova(r), as_float_nova(g), as_float_nova(b), as_float_nova(a))
 
@@ -486,6 +538,11 @@ def damage_amount(): return NovaValue(DynamicType.FloatDamageAmount)
 def last_sound_instance(): return NovaValue(DynamicType.IntLastSoundInstance)
 def camera_pos(): return NovaValue(DynamicType.VectorCameraPos)
 def camera_viewport_size(): return NovaValue(DynamicType.FloatCameraViewportSize)
+def transition(v=0): return NovaValue.transition(v)
+def easing(v=0): return NovaValue.easing(v)
+def sound(v=""): return NovaValue.sound(v)
+def music(v=""): return NovaValue.music(v)
+def sprite(v=""): return NovaValue.sprite(v)
 
 
 # --- Boolean Logic & Comparisons ---
