@@ -38,9 +38,10 @@ _STATIC_TO_PARAM_DYNAMIC = {
     StaticType.Layer: DynamicType.LayerParameter,
 }
 
+
 class NovaValue:
     def __init__(self, dynamic_type: int, *, bool_value=False, int_value=0, float_value=0.0,
-                 string_value=None, color_value=(0.0,0.0,0.0,0.0), vector_value=(0.0,0.0),
+                 string_value=None, color_value=(0.0, 0.0, 0.0, 0.0), vector_value=(0.0, 0.0),
                  int_list_value=None, sub_values=None):
         self.dynamic_type = int(dynamic_type)
         self.bool_value = bool(bool_value)
@@ -86,13 +87,16 @@ class NovaValue:
     def expr(cls, dt, *args): return cls(dt, sub_values=[as_nova(a) for a in args])
 
     def _is_f(self):
-        return 56 <= self.dynamic_type <= 93 or self.dynamic_type in (145, DynamicType.FloatParameter)
+        return (56 <= self.dynamic_type <= 93) or self.dynamic_type in (
+            145, 167, 191, 192, 193, 194, DynamicType.FloatParameter
+        )
 
     def _is_s(self):
         return self.dynamic_type in (
             DynamicType.StringConstant, DynamicType.StringVariable,
             DynamicType.StringFromInt, DynamicType.StringFromFloat,
             DynamicType.StringConcat, DynamicType.StringParameter,
+            DynamicType.StringObjectTag, DynamicType.StringSubstring,
         )
 
     def __add__(self, o):
@@ -100,15 +104,19 @@ class NovaValue:
         if self._is_s() or o._is_s():
             return NovaValue.expr(DynamicType.StringConcat, self, o)
         return NovaValue.expr(DynamicType.FloatAdd if (self._is_f() or o._is_f()) else DynamicType.IntAdd, self, o)
+
     def __sub__(self, o):
         o = as_nova(o)
         return NovaValue.expr(DynamicType.FloatSubtract if (self._is_f() or o._is_f()) else DynamicType.IntSubtract, self, o)
+
     def __mul__(self, o):
         o = as_nova(o)
         return NovaValue.expr(DynamicType.FloatMultiply if (self._is_f() or o._is_f()) else DynamicType.IntMultiply, self, o)
+
     def __truediv__(self, o):
         o = as_nova(o)
         return NovaValue.expr(DynamicType.FloatDivide if (self._is_f() or o._is_f()) else DynamicType.IntDivide, self, o)
+
     def __lt__(self, o): return NovaValue.expr(DynamicType.BoolLess, self, as_nova(o))
     def __le__(self, o): return NovaValue.expr(DynamicType.BoolLessOrEqual, self, as_nova(o))
     def __gt__(self, o): return NovaValue.expr(DynamicType.BoolGreater, self, as_nova(o))
@@ -145,10 +153,14 @@ class Variable(_ExprMixin):
     def __init__(self, vid, name, stype, init_val):
         self.variable_id, self.name, self.static_type = int(vid), str(name), int(stype)
         self.initial_value = as_typed_nova(init_val, self.static_type)
+
     def ref(self):
         return NovaValue(_STATIC_TO_VAR_DYNAMIC[self.static_type], int_value=self.variable_id)
+
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.variable_id); w.write_str(self.name); w.write_i32(self.static_type)
+        w.write_i32(self.variable_id)
+        w.write_str(self.name)
+        w.write_i32(self.static_type)
         self.initial_value._write_to(w)
 
 
@@ -156,10 +168,14 @@ class Parameter(_ExprMixin):
     def __init__(self, pid, name, stype, default_val):
         self.parameter_id, self.name, self.static_type = int(pid), str(name), int(stype)
         self.default_value = as_typed_nova(default_val, self.static_type)
+
     def ref(self):
         return NovaValue(_STATIC_TO_PARAM_DYNAMIC[self.static_type], int_value=self.parameter_id)
+
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.parameter_id); w.write_str(self.name); w.write_i32(self.static_type)
+        w.write_i32(self.parameter_id)
+        w.write_str(self.name)
+        w.write_i32(self.static_type)
         self.default_value._write_to(w)
 
 
@@ -240,17 +256,20 @@ def as_typed_nova(val, stype: int) -> NovaValue:
 def _reg(name, st, iv, is_global=True):
     lvl = _state.get_level()
     v = Variable(lvl._next_var_id(), name, st, iv)
-    if is_global: lvl.global_variables.append(v)
+    if is_global:
+        lvl.global_variables.append(v)
     return v
+
 
 def Bool(name, value=False, *, is_global=True): return _reg(name, StaticType.Bool, NovaValue.bool(value), is_global)
 def Int(name, value=0, *, is_global=True): return _reg(name, StaticType.Int, NovaValue.int(value), is_global)
 def Float(name, value=0.0, *, is_global=True): return _reg(name, StaticType.Float, NovaValue.float(value), is_global)
 def String(name, value="", *, is_global=True): return _reg(name, StaticType.String, NovaValue.string(value), is_global)
 def Color(name, value="#FFFFFF", *, is_global=True): return _reg(name, StaticType.Color, NovaValue.color(value), is_global)
-def Vector(name, value=(0.0,0.0), *, is_global=True): return _reg(name, StaticType.Vector, NovaValue.vector(value), is_global)
+def Vector(name, value=(0.0, 0.0), *, is_global=True): return _reg(name, StaticType.Vector, NovaValue.vector(value), is_global)
 def Object(name, obj=0, *, is_global=True): return _reg(name, StaticType.Object, NovaValue.object(obj), is_global)
 def ObjectSet(name, objs=(), *, is_global=True): return _reg(name, StaticType.ObjectSet, NovaValue.object_set(objs), is_global)
+
 
 HINT_TO_STATIC = {
     bool: StaticType.Bool, Bool: StaticType.Bool,
@@ -262,6 +281,7 @@ HINT_TO_STATIC = {
     Object: StaticType.Object,
     ObjectSet: StaticType.ObjectSet,
 }
+
 
 def resolve_static_type(hint, default=None) -> int:
     if isinstance(hint, int) and 0 <= hint <= 14:
@@ -277,6 +297,7 @@ def resolve_static_type(hint, default=None) -> int:
         if isinstance(default, (tuple, list)) and len(default) == 2: return StaticType.Vector
     raise ValueError(f"Cannot infer StaticType from annotation {hint!r} / default {default!r}")
 
+
 def return_reg(stype: int) -> Variable:
     lvl = _state.get_level()
     st = int(stype)
@@ -289,6 +310,7 @@ def return_reg(stype: int) -> Variable:
         }
         lvl._return_regs[st] = _reg(names.get(st, f"_rv_{st}"), st, default_nova_for(st), is_global=True)
     return lvl._return_regs[st]
+
 
 def player(): return NovaValue(DynamicType.ObjectPlayer)
 def players(): return NovaValue(DynamicType.ObjectSetPlayers)
@@ -305,10 +327,5 @@ def concat(a, b): return NovaValue.expr(DynamicType.StringConcat, NovaValue.stri
 def not_(cond): return NovaValue.expr(DynamicType.BoolNot, cond)
 def and_(a, b): return NovaValue.expr(DynamicType.BoolAnd, a, b)
 def or_(a, b): return NovaValue.expr(DynamicType.BoolOr, a, b)
-
-
-def value(dynamic_type: int, **kwargs):
-    return NovaValue(dynamic_type, **kwargs)
-
-def object_set(objs):
-    return NovaValue.object_set(objs)
+def value(dynamic_type: int, **kwargs): return NovaValue(dynamic_type, **kwargs)
+def object_set(objs): return NovaValue.object_set(objs)
