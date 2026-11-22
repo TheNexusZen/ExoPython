@@ -1,4 +1,7 @@
+import base64
+import binascii
 import io
+import os
 import struct
 import zlib
 from typing import Tuple, Union
@@ -77,8 +80,33 @@ def _decode_png_fallback(png_bytes: bytes) -> Tuple[int, int, bytes]:
     return width, height, bytes(out)
 
 
-def _load_rgba_and_png(source: Union[str, bytes]) -> Tuple[int, int, bytes, bytes]:
-    raw = source if isinstance(source, (bytes, bytearray)) else open(source, "rb").read()
+def _resolve_raw_bytes(source: Union[str, bytes, bytearray]) -> bytes:
+    if isinstance(source, (bytes, bytearray)):
+        return bytes(source)
+    if not isinstance(source, str):
+        raise TypeError(f"Expected file path, base64 string, or bytes; got {type(source).__name__}")
+
+    s = source.strip()
+    if s.startswith("data:") and ";base64," in s:
+        b64_part = s.split(";base64,", 1)[1]
+        return base64.b64decode(b64_part)
+
+    if len(s) < 260 and os.path.exists(s):
+        with open(s, "rb") as f:
+            return f.read()
+
+    try:
+        decoded = base64.b64decode(s, validate=True)
+        if decoded:
+            return decoded
+    except (binascii.Error, ValueError):
+        pass
+
+    raise FileNotFoundError(f"Image file not found and input is not valid base64: {s[:64]!r}")
+
+
+def _load_rgba_and_png(source: Union[str, bytes, bytearray]) -> Tuple[int, int, bytes, bytes]:
+    raw = _resolve_raw_bytes(source)
     if _HAS_PIL:
         with PILImage.open(io.BytesIO(raw)) as img:
             rgba_img = img.convert("RGBA")
@@ -88,18 +116,18 @@ def _load_rgba_and_png(source: Union[str, bytes]) -> Tuple[int, int, bytes, byte
             rgba_img.save(buf, format="PNG")
             return w, h, rgba, buf.getvalue()
     w, h, rgba = _decode_png_fallback(raw)
-    return w, h, rgba, bytes(raw)
+    return w, h, rgba, raw
 
 
 class ExoImage:
-    def __init__(self, path: Union[str, bytes], mode: str = "pixel", pos: Tuple[float, float] = (0.0, 0.0)):
+    def __init__(self, source: Union[str, bytes, bytearray], mode: str = "pixel", pos: Tuple[float, float] = (0.0, 0.0)):
         m = str(mode).strip().lower()
         if m not in ("pixel", "pattern"):
             raise ValueError("mode must be 'pixel' or 'pattern'")
 
         self.mode = m
         self.pos = (float(pos[0]), float(pos[1]))
-        self.width, self.height, self.rgba, self.png_bytes = _load_rgba_and_png(path)
+        self.width, self.height, self.rgba, self.png_bytes = _load_rgba_and_png(source)
         self.pattern_id = None
         self.objects = []
 
@@ -109,6 +137,10 @@ class ExoImage:
             lvl.patterns.append(Pattern(pattern_id=self.pattern_id, pattern_frames=[self.png_bytes]))
         else:
             self._build_pixels()
+
+    def to_base64(self, data_url: bool = False) -> str:
+        b64 = base64.b64encode(self.png_bytes).decode("ascii")
+        return f"data:image/png;base64,{b64}" if data_url else b64
 
     def _pixel(self, x: int, y: int) -> Tuple[int, int, int, int]:
         i = (y * self.width + x) * 4
