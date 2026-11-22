@@ -4,6 +4,7 @@ import gzip
 import os
 import struct
 import sys
+from dataclasses import asdict
 from . import _state
 from .binary import BinaryReader, rgba_to_hex
 from .constants import TILE_IDS, OBJECT_PROPERTIES
@@ -244,16 +245,16 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.wait_frames({_fmt_nova(a['fields'][0])})")
         elif aid == 5:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.move({f[0]}, {f[1]}, is_global={f[2]}, duration={f[3]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.move({f[0]}, {f[1]}, is_global={f[2]}, duration={f[3]}, easing={f[4]}, wait={wait!r})")
         elif aid == 6:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.scale({f[0]}, {f[1]}, duration={f[2]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.scale({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 7:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.rotate({f[0]}, {f[1]}, shortest_path={f[2]}, is_global={f[3]}, duration={f[4]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.rotate({f[0]}, {f[1]}, shortest_path={f[2]}, is_global={f[3]}, duration={f[4]}, easing={f[5]}, wait={wait!r})")
         elif aid == 8:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.rotate_around({f[0]}, {f[1]}, {f[2]}, rotate_target={f[3]}, duration={f[4]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.rotate_around({f[0]}, {f[1]}, {f[2]}, rotate_target={f[3]}, duration={f[4]}, easing={f[5]}, wait={wait!r})")
         elif aid == 9:
             val_s = _fmt_nova(a["value"]) if a["value"] is not None else "None"
             lines.append(f"{indent}{target_var}.set_var({a['var_id']}, {val_s})")
@@ -263,10 +264,10 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.reset_object({_fmt_nova(a['fields'][0])})")
         elif aid == 12:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_color({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_color({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, easing={f[4]}, wait={wait!r})")
         elif aid == 13:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.set_transparency({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_transparency({f[0]}, {f[1]}, channel={f[2]}, duration={f[3]}, easing={f[4]}, wait={wait!r})")
         elif aid == 14:
             f = [_fmt_nova(x) for x in a["fields"]]
             lines.append(f"{indent}{target_var}.set_secondary_color({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
@@ -297,21 +298,21 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.game_finish()")
         elif aid == 26:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.camera_pan({f[0]}, duration={f[1]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.camera_pan({f[0]}, duration={f[1]}, easing={f[2]}, wait={wait!r})")
         elif aid == 27:
             lines.append(f"{indent}{target_var}.camera_follow_player()")
         elif aid == 28:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.camera_zoom({f[0]}, duration={f[1]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.camera_zoom({f[0]}, duration={f[1]}, easing={f[2]}, wait={wait!r})")
         elif aid == 29:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.camera_zoom_reset(duration={f[0]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.camera_zoom_reset(duration={f[0]}, easing={f[1]}, wait={wait!r})")
         elif aid == 30:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.camera_offset({f[0]}, duration={f[1]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.camera_offset({f[0]}, duration={f[1]}, easing={f[2]}, wait={wait!r})")
         elif aid == 31:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.camera_offset_reset(duration={f[0]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.camera_offset_reset(duration={f[0]}, easing={f[1]}, wait={wait!r})")
         elif aid == 32:
             f = [_fmt_nova(x) for x in a["fields"]]
             lines.append(f"{indent}{target_var}.camera_shake({f[0]}, {f[1]}, {f[2]}, {f[3]}, {f[4]}, wait={wait!r})")
@@ -348,13 +349,13 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.transition_out({f[0]}, {f[1]}, duration={f[2]}, easing={f[3]}, wait={wait!r})")
         elif aid == 46:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.time_scale({f[0]}, duration={f[1]}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.time_scale({f[0]}, duration={f[1]}, easing={f[2]}, wait={wait!r})")
         elif aid == 47:
             p_str = ", ".join(f"({pid}, {_fmt_nova(v)})" for pid, v in a["params"])
             lines.append(f"{indent}{target_var}.call_id({a['fn_id']}, [{p_str}], wait={wait!r})")
         elif aid == 48:
             val_s = _fmt_nova(a["value"]) if a["value"] is not None else "None"
-            lines.append(f"{indent}{target_var}.set_var_over_time({a['var_id']}, {val_s}, duration={_fmt_nova(a['duration'])}, wait={wait!r})")
+            lines.append(f"{indent}{target_var}.set_var_over_time({a['var_id']}, {val_s}, duration={_fmt_nova(a['duration'])}, easing={_fmt_nova(a['easing'])}, wait={wait!r})")
         elif aid == 49:
             lines.append(f"{indent}_fe = exoscript.block()")
             lines.extend(_emit_actions(a["actions"], "_fe", indent))
@@ -389,6 +390,137 @@ def _read_script(r: BinaryReader, ver: int = 18) -> dict:
         "id": sid, "name": name, "is_fn": is_fn, "act_cnt": act_cnt,
         "cond": cond, "activators": activators, "params": params,
         "vars": local_vars, "actions": actions,
+    }
+
+
+def inspect_level(filepath: str) -> dict:
+    """Parse an .exolvl file into a complete structured dictionary (mirrors Rust's print_exolvl / serde)."""
+    with open(filepath, "rb") as f:
+        raw = f.read()
+
+    data = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    exopy_meta, data = read_exopy_meta(data)
+    r = BinaryReader(data)
+    magic = r.raw(4)
+    if magic != b"NYA^":
+        raise WrongMagicError(magic)
+
+    local_lvl = LocalLevel.read(r)
+    ver = local_lvl.serialization_version
+    ld_uuid = r.string()
+    ld_ver = r.i32()
+    ld_nova = r.bool()
+    legacy_tiles = LegacyTileLayers.read(r)
+
+    objects = []
+    for _ in range(r.i32()):
+        eid, tid = r.i32(), r.i32()
+        prefab_eid, prefab_id = r.i32(), r.i32()
+        pos, scale, rot, tag = r.vec2(), r.vec2(), r.f32(), r.string()
+        props = dict(r.vec(lambda: _read_prop(r)))
+        layer = r.i32()
+        in_group = r.i32()
+        group_members = r.vec(r.i32)
+        objects.append({
+            "entity_id": eid,
+            "tile_id": tid,
+            "tile_name": _ID_TO_TILE.get(tid, str(tid)),
+            "prefab_entity_id": prefab_eid,
+            "prefab_id": prefab_id,
+            "position": list(pos),
+            "scale": list(scale),
+            "rotation": rot,
+            "tag": tag,
+            "properties": props,
+            "in_layer": layer,
+            "in_group": in_group,
+            "group_members": group_members,
+        })
+
+    layers = []
+    for _ in range(r.i32()):
+        layers.append({
+            "layer_id": r.i32(),
+            "layer_name": r.string(),
+            "selected": r.bool(),
+            "invisible": r.bool(),
+            "locked": r.bool(),
+            "foreground_type": r.i32(),
+            "parallax": list(r.vec2()),
+            "fixed_size": r.bool(),
+            "children": r.vec(r.i32),
+        })
+
+    prefabs = [
+        {"prefab_id": pf.prefab_id, "image_bytes": len(pf.prefab_image_data), "items": [asdict(i) for i in pf.items]}
+        for pf in r.vec(lambda: Prefab.read(r))
+    ]
+    brushes = [asdict(b) for b in r.vec(lambda: Brush.read(r))]
+    patterns = [
+        {"pattern_id": pt.pattern_id, "frame_sizes": [len(fr) for fr in pt.pattern_frames]}
+        for pt in r.vec(lambda: Pattern.read(r))
+    ]
+    color_palette = [rgba_to_hex(c) for c in r.vec(r.color)] if ver >= 17 else None
+
+    ld_author_time = r.i64()
+    ld_author_laps = r.vec(r.i64)
+    ld_silver = r.i64()
+    ld_gold = r.i64()
+    ld_laps = r.i32()
+    center_camera = r.bool()
+    legacy_scripts = r.vec(r.i32)
+    v19_extra = r.i32() if ver >= 19 else None
+    nova_scripts = r.vec(lambda: _read_script(r, ver))
+    global_vars = r.vec(lambda: _read_var(r, ver))
+    theme = r.string()
+    custom_bg_color = rgba_to_hex(r.color())
+    terrain_style = asdict(TerrainCopyStyle.read(r))
+    terrain_style["unknown1"] = list(terrain_style["unknown1"])
+    default_music = r.bool()
+    music_ids = r.vec(r.string)
+    allow_direction_change = r.bool()
+    disable_replays = r.bool()
+    disable_revive_pads = r.bool()
+    disable_start_anim = r.bool()
+    gravity = list(r.vec2())
+    replay = AuthorReplay.read(r) if r.i + 4 <= len(r.b) else AuthorReplay()
+
+    return {
+        "exopy_meta": exopy_meta,
+        "local_level": asdict(local_lvl),
+        "level_data": {
+            "level_id": ld_uuid,
+            "level_version": ld_ver,
+            "nova_level": ld_nova,
+            "legacy_tiles": asdict(legacy_tiles),
+            "objects": objects,
+            "layers": layers,
+            "prefabs": prefabs,
+            "brushes": brushes,
+            "patterns": patterns,
+            "color_palette": color_palette,
+            "author_time": ld_author_time,
+            "author_lap_times": ld_author_laps,
+            "silver_medal_time": ld_silver,
+            "gold_medal_time": ld_gold,
+            "laps": ld_laps,
+            "center_camera": center_camera,
+            "scripts": legacy_scripts,
+            "v19_script_extra": v19_extra,
+            "nova_scripts": nova_scripts,
+            "global_variables": global_vars,
+            "theme": theme,
+            "custom_background_color": custom_bg_color,
+            "terrain_copy_style": terrain_style,
+            "default_music": default_music,
+            "music_ids": music_ids,
+            "allow_direction_change": allow_direction_change,
+            "disable_replays": disable_replays,
+            "disable_revive_pads": disable_revive_pads,
+            "disable_start_animation": disable_start_anim,
+            "gravity": gravity,
+        },
+        "author_replay_bytes": len(replay.data),
     }
 
 
