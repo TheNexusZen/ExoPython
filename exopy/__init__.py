@@ -3,6 +3,7 @@ from . import _state, scripts, variables, stdlib, types_ext
 from .decompile import decompile
 from .binary import BinaryWriter, parse_color
 from .constants import THEMES, DEFAULT_SETTINGS, TILE_IDS, OBJECT_PROPERTIES
+from .image import ExoImage
 from .types_ext import (
     AuthorReplay, Brush, BrushGrid, BrushObject,
     LegacyTileLayers, OldAction, OldActionProperty, OldScript,
@@ -100,6 +101,13 @@ class GameObject:
                 self.in_group = int(v)
             elif k == "GroupMembers":
                 self.group_members = [int(x) for x in v]
+            elif k == "Pattern":
+                pat_id = v.pattern_id if hasattr(v, "pattern_id") else int(v)
+                if pat_id is None:
+                    raise ValueError("Cannot use a 'pixel' ExoImage as a Pattern; use mode='pattern'")
+                self.properties["Pattern"] = pat_id
+                if "FillMode" not in cfg and "FillMode" not in self.properties:
+                    self.properties["FillMode"] = 1
             elif k == "Box":
                 hw, hh = float(v[0]) / 2.0, float(v[1]) / 2.0
                 self.properties["TerrainCorners"] = [[(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]]
@@ -185,7 +193,7 @@ class ExoLevel:
         self.terrain_style = TerrainCopyStyle()
         self.author_replay = AuthorReplay()
 
-        self._eid = self._vid = self._sid = self._pid = 1
+        self._eid = self._vid = self._sid = self._pid = self._pat_id = 1
         self._lid = 2
         self._return_regs = {}
         self._stdlib_cache = {}
@@ -213,6 +221,11 @@ class ExoLevel:
     def _next_param_id(self):
         v = self._pid
         self._pid += 1
+        return v
+
+    def _next_pattern_id(self):
+        v = self._pat_id
+        self._pat_id += 1
         return v
 
     def _get_layer(self, lid):
@@ -368,6 +381,10 @@ def CreateLayer(name: str, foreground_type: int = 0, parallax=(0.0, 0.0)):
     layer = Layer(lvl._next_layer_id(), name, foreground_type, parallax)
     lvl.layers.append(layer)
     return layer
+
+
+def CreateImage(path, mode: str = "pixel", pos: tuple = (0.0, 0.0)) -> ExoImage:
+    return ExoImage(path, mode=mode, pos=pos)
 
 
 def set_generator_mode(enabled: bool = True):
