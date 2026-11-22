@@ -1,9 +1,14 @@
 import gzip, hashlib, os, secrets, struct, uuid
-from . import _state, scripts, variables, stdlib, types_ext
+from . import _state, scripts, variables, stdlib, types_ext, errors
 from .decompile import decompile
 from .binary import BinaryWriter, parse_color
 from .constants import THEMES, DEFAULT_SETTINGS, TILE_IDS, OBJECT_PROPERTIES
-from .image import ExoImage
+from .errors import (
+    ExopyError, WrongMagicError, InvalidDynamicTypeError, InvalidStaticTypeError,
+    InvalidObjectPropertyError, InvalidOldActionTypeError, InvalidActionTypeError,
+    InvalidThemeError,
+)
+from .image import ExoImage, _resolve_raw_bytes
 from .types_ext import (
     AuthorReplay, Brush, BrushGrid, BrushObject,
     LegacyTileLayers, OldAction, OldActionProperty, OldScript,
@@ -114,7 +119,7 @@ class GameObject:
             elif k in OBJECT_PROPERTIES:
                 self.properties[k] = v
             else:
-                raise ValueError(f"Unknown object property: '{k}'")
+                raise InvalidObjectPropertyError(k)
         return self
 
     def pack(self):
@@ -125,6 +130,22 @@ class GameObject:
         if layer and self.entity_id not in layer.children:
             layer.children.append(self.entity_id)
         return self
+
+    def _to_raw_object(self) -> RawObject:
+        return RawObject(
+            entity_id=self.entity_id,
+            tile_id=self.tile_id,
+            prefab_entity_id=self.prefab_entity_id,
+            prefab_id=self.prefab_id,
+            position=self.pos,
+            scale=self.scale,
+            rotation=self.rotation,
+            tag=self.tag,
+            properties=list(self.properties.items()),
+            in_layer=self.layer,
+            in_group=self.in_group,
+            group_members=list(self.group_members),
+        )
 
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.entity_id)
@@ -164,7 +185,7 @@ class ExoLevel:
     def __init__(self, name, bg_type="Mountains", laps=1, gravity=(0.0, -74.0), settings=None):
         tk = str(bg_type).strip().lower()
         if tk not in THEMES:
-            raise ValueError("bg_type must be Mountains, Halloween, Christmas, or Custom")
+            raise InvalidThemeError(bg_type)
         if not (1 <= int(laps) <= 10):
             raise ValueError("laps must be 1..10")
 
@@ -194,6 +215,7 @@ class ExoLevel:
         self.author_replay = AuthorReplay()
 
         self._eid = self._vid = self._sid = self._pid = self._pat_id = 1
+        self._prefab_id = self._brush_id = 1
         self._lid = 2
         self._return_regs = {}
         self._stdlib_cache = {}
@@ -226,6 +248,16 @@ class ExoLevel:
     def _next_pattern_id(self):
         v = self._pat_id
         self._pat_id += 1
+        return v
+
+    def _next_prefab_id(self):
+        v = self._prefab_id
+        self._prefab_id += 1
+        return v
+
+    def _next_brush_id(self):
+        v = self._brush_id
+        self._brush_id += 1
         return v
 
     def _get_layer(self, lid):
@@ -383,8 +415,50 @@ def CreateLayer(name: str, foreground_type: int = 0, parallax=(0.0, 0.0)):
     return layer
 
 
-def CreateImage(path, mode: str = "pixel", pos: tuple = (0.0, 0.0)) -> ExoImage:
-    return ExoImage(path, mode=mode, pos=pos)
+def CreateImage(source, mode: str = "pixel", pos: tuple = (0.0, 0.0)) -> ExoImage:
+    """Create a pixel-art object group or level Pattern from a file path, bytes, or base64 string."""
+    return ExoImage(source, mode=mode, pos=pos)
+
+
+def CreatePrefab(objects, preview_image=None) -> Prefab:
+    """Register a reusable Prefab from a list of GameObjects or RawObjects."""
+    lvl = _state.get_level()
+    pid = lvl._next_prefab_id()
+    img_bytes = b""
+    if preview_image is not None:
+        img_bytes = preview_image.png_bytes if hasattr(preview_image, "png_bytes") else _resolve_raw_bytes(preview_image)
+    items = [o._to_raw_object() if hasattr(o, "_to_raw_object") else o for o in objects]
+    pf = Prefab(prefab_id=pid, prefab_image_data=img_bytes, items=items)
+    lvl.prefabs.append(pf)
+    return pf
+
+
+def CreateBrush(objects, spread=(0.0, 0.0), frequency: float = 1.0, grid=(0, 0)) -> Brush:
+    """Register a scatter Brush from a list of GameObjects or BrushObjects."""
+    lvl = _state.get_level()
+    bid = lvl._next_brush_id()
+    b_objs = []
+    for o in objects:
+        if isinstance(o, BrushObject):
+            b_objs.append(o)
+        elif hasattr(o, "entity_id"):
+            b_objs.append(BrushObject(
+                entity_id=o.entity_id,
+                properties=list(o.properties.items()),
+                scale=o.scale[0],
+                rotation=o.rotation,
+            ))
+        else:
+            raise TypeError(f"Unsupported brush object: {o!r}")
+    br = Brush(
+        brush_id=bid,
+        spread=(float(spread[0]), float(spread[1])),
+        frequency=float(frequency),
+        grid=BrushGrid(int(grid[0]), int(grid[1])),
+        objects=b_objs,
+    )
+    lvl.brushes.append(br)
+    return br
 
 
 def set_generator_mode(enabled: bool = True):
