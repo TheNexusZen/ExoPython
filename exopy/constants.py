@@ -267,6 +267,7 @@ class DynamicType:
     FloatColorA = 194
     StringSubstring = 195
     IntStringLength = 196
+    PrefabConstant = 201
 
 
 class ActionID:
@@ -283,6 +284,7 @@ class ActionID:
     DialogueShow, StopScript, TransitionIn, TransitionOut, TimeScale = 42, 43, 44, 45, 46
     RunFunction, SetVariableOverTime, RepeatForEachObject = 47, 48, 49
     StopSound, PlayParticleSystem, StopParticleSystem = 50, 51, 52
+    ObjectCreate, ObjectDelete, SetWorldGravity, RunScript = 53, 54, 55, 56
 
 
 class OldActionType:
