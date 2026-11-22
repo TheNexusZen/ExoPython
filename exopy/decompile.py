@@ -567,6 +567,11 @@ def decompile(
                         af.write(frame_bytes)
                     frame_exprs.append(f"open({fpath!r}, 'rb').read()")
                 lines.append(f"Level.patterns.append(Pattern(pattern_id={pat.pattern_id}, pattern_frames=[{', '.join(frame_exprs)}]))")
+            elif len(pat.pattern_frames) == 1:
+                b64_str = base64.b64encode(pat.pattern_frames[0]).decode("ascii")
+                lines.append(f"pat_{pat.pattern_id} = exo.CreateImage({b64_str!r}, mode='pattern')")
+                lines.append(f"pat_{pat.pattern_id}.pattern_id = {pat.pattern_id}")
+                lines.append(f"Level.patterns[-1].pattern_id = {pat.pattern_id}")
             else:
                 lines.append(f"Level.patterns.append({pat!r})")
         lines.append("")
