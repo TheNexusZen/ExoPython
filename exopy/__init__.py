@@ -1,6 +1,6 @@
 import gzip, hashlib, json, os, secrets, struct, uuid
 from dataclasses import asdict
-from . import _state, scripts, variables, stdlib, types_ext, errors
+from . import _state, scripts, variables, stdlib, types_ext, errors, sounds, replay, merge
 from .decompile import decompile, inspect_level
 from .merge import extract_prefab, merge_level
 from .binary import BinaryWriter, now_cs_ticks, parse_color, rgba_to_hex
@@ -11,6 +11,8 @@ from .errors import (
     InvalidThemeError,
 )
 from .image import ExoImage, _resolve_raw_bytes
+from .replay import ParsedReplay, ReplayFrame
+from .sounds import analyze_audio, audio_to_python, audio_to_script, freq_to_semitones, note_to_midi, note_to_semitones
 from .types_ext import (
     AuthorReplay, Brush, BrushGrid, BrushObject,
     LegacyTileLayers, LocalLevel, OldAction, OldActionProperty, OldScript,
