@@ -117,7 +117,7 @@ def _read_prop(r: BinaryReader):
     raise InvalidObjectPropertyError(ptype)
 
 
-def _read_nova(r: BinaryReader, ver: int = 18) -> dict:
+def _read_nova(r: BinaryReader, ver: int = 23) -> dict:
     dt = r.i32()
     b = r.bool()
     i = r.i32()
@@ -125,13 +125,11 @@ def _read_nova(r: BinaryReader, ver: int = 18) -> dict:
     s = r.option(r.string)
     c = r.color()
     v = r.vec2()
-    if ver >= 19:
-        r.u8()
+    u5 = r.raw(1) if ver >= 19 else b"\x00"
     il = r.option(lambda: r.vec(r.i32))
+    u6 = r.raw(4) if ver >= 19 else b"\x00\x00\x00\x00"
     sub = r.option(lambda: r.vec(lambda: _read_nova(r, ver)))
-    if ver >= 19:
-        r.raw(4)
-    return {"dt": dt, "b": b, "i": i, "f": f, "s": s, "c": c, "v": v, "il": il, "sub": sub}
+    return {"dt": dt, "b": b, "i": i, "f": f, "s": s, "c": c, "v": v, "il": il, "sub": sub, "u5": u5, "u6": u6}
 
 
 def _fmt_nova(nv: dict) -> str:
@@ -169,11 +167,15 @@ def _fmt_nova(nv: dict) -> str:
     if nv["sub"] is not None:
         subs = ", ".join(_fmt_nova(s) for s in nv["sub"])
         kw.append(f"sub_values=[{subs}]")
+    if nv.get("u5", b"\x00") != b"\x00":
+        kw.append(f"unknown5={nv['u5']!r}")
+    if nv.get("u6", b"\x00\x00\x00\x00") != b"\x00\x00\x00\x00":
+        kw.append(f"unknown6={nv['u6']!r}")
     args = f"{dt}, " + ", ".join(kw) if kw else str(dt)
     return f"exovar.value({args})"
 
 
-def _read_action(r: BinaryReader, ver: int = 18) -> dict:
+def _read_action(r: BinaryReader, ver: int = 23) -> dict:
     aid = r.i32()
     closed = r.bool()
     wait = r.bool()
@@ -194,50 +196,62 @@ def _read_action(r: BinaryReader, ver: int = 18) -> dict:
         d = {"fields": [rn() for _ in range(5)]}
     elif aid in (6, 14, 15, 16, 17, 44, 45):
         d = {"fields": [rn() for _ in range(4)]}
-    elif aid in (7, 8):
+    elif aid == 7:
         d = {"fields": [rn() for _ in range(6)]}
+    elif aid == 8:
+        d = {"fields": [rn() for _ in range(7 if ver >= 23 else 6)]}
     elif aid == 9:
         d = {"var_id": r.i32(), "value": r.option(rn)}
     elif aid == 10:
         d = {"var_id": r.i32()}
-    elif aid in (11, 21, 22, 24, 38, 39, 40, 43, 51):
+    elif aid in (11, 21, 22, 24, 38, 39, 40, 43, 51, 54, 55, 56):
         d = {"fields": [rn()]}
     elif aid in (18, 19, 20, 23, 29, 31, 35, 36, 37, 41, 50, 52):
         d = {"fields": [rn(), rn()]}
     elif aid in (25, 27):
         d = {"fields": []}
-    elif aid in (26, 28, 30, 33, 34, 42, 46):
+    elif aid in (26, 28, 30, 34, 46, 53):
         d = {"fields": [rn(), rn(), rn()]}
+    elif aid == 33:
+        d = {"fields": [rn() for _ in range(5 if ver >= 23 else 3)]}
+    elif aid == 42:
+        d = {"fields": [rn() for _ in range(4 if ver >= 23 else 3)]}
     elif aid == 47:
         d = {"fn_id": r.i32(), "params": r.vec(lambda: (r.i32(), rn()))}
     elif aid == 48:
         d = {"var_id": r.i32(), "value": r.option(rn), "duration": rn(), "easing": rn()}
     elif aid == 49:
-        d = {"target": rn(), "actions": ra()}
+        if ver >= 23:
+            acts = ra()
+            tgt = rn()
+            d = {"target": tgt, "actions": acts}
+        else:
+            d = {"target": rn(), "actions": ra()}
     else:
         raise InvalidActionTypeError(aid)
 
-    d.update({"aid": aid, "closed": closed, "wait": wait})
+    d.update({"aid": aid, "closed": closed, "wait": wait, "ver": ver})
     return d
 
 
-def _emit_actions(acts, target_var: str, indent: str = "") -> list:
+def _emit_actions(acts, target_var: str, indent: str = "", fn_lookup: dict = None) -> list:
+    fn_lookup = fn_lookup or {}
     lines = []
     for a in acts:
         aid, wait = a["aid"], a["wait"]
         if aid == 0:
             lines.append(f"{indent}_rep = exoscript.block()")
-            lines.extend(_emit_actions(a["actions"], "_rep", indent))
+            lines.extend(_emit_actions(a["actions"], "_rep", indent, fn_lookup))
             lines.append(f"{indent}{target_var}.repeat({_fmt_nova(a['count'])}, _rep, wait={wait!r})")
         elif aid == 1:
             lines.append(f"{indent}_whl = exoscript.block()")
-            lines.extend(_emit_actions(a["actions"], "_whl", indent))
+            lines.extend(_emit_actions(a["actions"], "_whl", indent, fn_lookup))
             lines.append(f"{indent}{target_var}.repeat_while({_fmt_nova(a['condition'])}, _whl, wait={wait!r})")
         elif aid == 2:
             lines.append(f"{indent}_if = exoscript.block()")
-            lines.extend(_emit_actions(a["if_actions"], "_if", indent))
+            lines.extend(_emit_actions(a["if_actions"], "_if", indent, fn_lookup))
             lines.append(f"{indent}_el = exoscript.block()")
-            lines.extend(_emit_actions(a["else_actions"], "_el", indent))
+            lines.extend(_emit_actions(a["else_actions"], "_el", indent, fn_lookup))
             lines.append(f"{indent}{target_var}.if_else({_fmt_nova(a['condition'])}, _if, _el, wait={wait!r})")
         elif aid == 3:
             lines.append(f"{indent}{target_var}.wait({_fmt_nova(a['fields'][0])})")
@@ -254,7 +268,10 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.rotate({f[0]}, {f[1]}, shortest_path={f[2]}, is_global={f[3]}, duration={f[4]}, easing={f[5]}, wait={wait!r})")
         elif aid == 8:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.rotate_around({f[0]}, {f[1]}, {f[2]}, rotate_target={f[3]}, duration={f[4]}, easing={f[5]}, wait={wait!r})")
+            if len(f) >= 7:
+                lines.append(f"{indent}{target_var}.rotate_around({f[0]}, {f[1]}, {f[2]}, is_global={f[3]}, rotate_target={f[4]}, duration={f[5]}, easing={f[6]}, wait={wait!r})")
+            else:
+                lines.append(f"{indent}{target_var}.rotate_around({f[0]}, {f[1]}, {f[2]}, rotate_target={f[3]}, duration={f[4]}, easing={f[5]}, wait={wait!r})")
         elif aid == 9:
             val_s = _fmt_nova(a["value"]) if a["value"] is not None else "None"
             lines.append(f"{indent}{target_var}.set_var({a['var_id']}, {val_s})")
@@ -318,7 +335,10 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.camera_shake({f[0]}, {f[1]}, {f[2]}, {f[3]}, {f[4]}, wait={wait!r})")
         elif aid == 33:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.play_sound({f[0]}, volume={f[1]}, pitch={f[2]})")
+            if len(f) >= 5:
+                lines.append(f"{indent}{target_var}.play_sound({f[0]}, volume={f[1]}, pitch={f[2]}, looping={f[3]}, fade_in={f[4]})")
+            else:
+                lines.append(f"{indent}{target_var}.play_sound({f[0]}, volume={f[1]}, pitch={f[2]})")
         elif aid == 34:
             f = [_fmt_nova(x) for x in a["fields"]]
             lines.append(f"{indent}{target_var}.play_music({f[0]}, volume={f[1]}, pitch={f[2]})")
@@ -338,7 +358,10 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.game_text({_fmt_nova(a['fields'][0])}, {_fmt_nova(a['fields'][1])}, wait={wait!r})")
         elif aid == 42:
             f = [_fmt_nova(x) for x in a["fields"]]
-            lines.append(f"{indent}{target_var}.dialogue_show({f[0]}, {f[1]}, {f[2]}, wait={wait!r})")
+            if len(f) >= 4:
+                lines.append(f"{indent}{target_var}.dialogue_show({f[0]}, {f[1]}, {f[2]}, duration={f[3]}, wait={wait!r})")
+            else:
+                lines.append(f"{indent}{target_var}.dialogue_show({f[0]}, {f[1]}, {f[2]}, wait={wait!r})")
         elif aid == 43:
             lines.append(f"{indent}{target_var}.stop_script({_fmt_nova(a['fields'][0])})")
         elif aid == 44:
@@ -351,14 +374,21 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             f = [_fmt_nova(x) for x in a["fields"]]
             lines.append(f"{indent}{target_var}.time_scale({f[0]}, duration={f[1]}, easing={f[2]}, wait={wait!r})")
         elif aid == 47:
-            p_str = ", ".join(f"({pid}, {_fmt_nova(v)})" for pid, v in a["params"])
-            lines.append(f"{indent}{target_var}.call_id({a['fn_id']}, [{p_str}], wait={wait!r})")
+            fn_info = fn_lookup.get(a["fn_id"])
+            param_map = dict(a["params"])
+            if fn_info and set(param_map.keys()) == set(fn_info["param_ids"]):
+                ordered_args = ", ".join(_fmt_nova(param_map[pid]) for pid in fn_info["param_ids"])
+                sep = ", " if ordered_args else ""
+                lines.append(f"{indent}{target_var}.call({fn_info['var']}{sep}{ordered_args}, wait={wait!r})")
+            else:
+                p_str = ", ".join(f"({pid}, {_fmt_nova(v)})" for pid, v in a["params"])
+                lines.append(f"{indent}{target_var}.call_id({a['fn_id']}, [{p_str}], wait={wait!r})")
         elif aid == 48:
             val_s = _fmt_nova(a["value"]) if a["value"] is not None else "None"
             lines.append(f"{indent}{target_var}.set_var_over_time({a['var_id']}, {val_s}, duration={_fmt_nova(a['duration'])}, easing={_fmt_nova(a['easing'])}, wait={wait!r})")
         elif aid == 49:
             lines.append(f"{indent}_fe = exoscript.block()")
-            lines.extend(_emit_actions(a["actions"], "_fe", indent))
+            lines.extend(_emit_actions(a["actions"], "_fe", indent, fn_lookup))
             lines.append(f"{indent}{target_var}.repeat_for_each({_fmt_nova(a['target'])}, _fe, wait={wait!r})")
         elif aid == 50:
             lines.append(f"{indent}{target_var}.stop_sound({_fmt_nova(a['fields'][0])}, fade_out={_fmt_nova(a['fields'][1])})")
@@ -366,25 +396,39 @@ def _emit_actions(acts, target_var: str, indent: str = "") -> list:
             lines.append(f"{indent}{target_var}.play_particles({_fmt_nova(a['fields'][0])})")
         elif aid == 52:
             lines.append(f"{indent}{target_var}.stop_particles({_fmt_nova(a['fields'][0])}, clear={_fmt_nova(a['fields'][1])})")
+        elif aid == 53:
+            f = [_fmt_nova(x) for x in a["fields"]]
+            lines.append(f"{indent}{target_var}.create_object({f[0]}, position={f[1]}, foreground={f[2]})")
+        elif aid == 54:
+            lines.append(f"{indent}{target_var}.delete_object({_fmt_nova(a['fields'][0])})")
+        elif aid == 55:
+            lines.append(f"{indent}{target_var}.set_world_gravity({_fmt_nova(a['fields'][0])})")
+        elif aid == 56:
+            lines.append(f"{indent}{target_var}.run_script({_fmt_nova(a['fields'][0])})")
         elif "fields" in a:
             f = ", ".join(_fmt_nova(x) for x in a["fields"])
             lines.append(f"{indent}{target_var}.raw_action({aid}{', ' + f if f else ''}, wait={wait!r})")
     return lines
 
 
-def _read_var(r: BinaryReader, ver: int = 18) -> dict:
-    return {"id": r.i32(), "name": r.string(), "stype": r.i32(), "init": _read_nova(r, ver)}
+def _read_var(r: BinaryReader, ver: int = 23, is_param: bool = False) -> dict:
+    vid = r.i32()
+    name = r.string()
+    stype = r.i32()
+    u4 = r.raw(4) if (ver >= 23 and not is_param) else b"\x00\x00\x00\x00"
+    init = _read_nova(r, ver)
+    return {"id": vid, "name": name, "stype": stype, "init": init, "u4": u4}
 
 
-def _read_script(r: BinaryReader, ver: int = 18) -> dict:
+def _read_script(r: BinaryReader, ver: int = 23) -> dict:
     sid = r.i32()
     name = r.string()
     is_fn = r.bool()
     act_cnt = r.i32()
     cond = _read_nova(r, ver)
     activators = r.vec(lambda: (r.i32(), r.vec(lambda: _read_nova(r, ver))))
-    params = r.vec(lambda: _read_var(r, ver))
-    local_vars = r.vec(lambda: _read_var(r, ver))
+    params = r.vec(lambda: _read_var(r, ver, is_param=True))
+    local_vars = r.vec(lambda: _read_var(r, ver, is_param=False))
     actions = r.vec(lambda: _read_action(r, ver))
     return {
         "id": sid, "name": name, "is_fn": is_fn, "act_cnt": act_cnt,
@@ -394,7 +438,6 @@ def _read_script(r: BinaryReader, ver: int = 18) -> dict:
 
 
 def inspect_level(filepath: str) -> dict:
-    """Parse an .exolvl file into a complete structured dictionary (mirrors Rust's print_exolvl / serde)."""
     with open(filepath, "rb") as f:
         raw = f.read()
 
@@ -469,9 +512,10 @@ def inspect_level(filepath: str) -> dict:
     ld_laps = r.i32()
     center_camera = r.bool()
     legacy_scripts = r.vec(r.i32)
-    v19_extra = r.i32() if ver >= 19 else None
+    unknown2 = list(r.raw(4)) if ver >= 19 else None
     nova_scripts = r.vec(lambda: _read_script(r, ver))
-    global_vars = r.vec(lambda: _read_var(r, ver))
+    unknown3 = list(r.raw(4)) if ver >= 23 else None
+    global_vars = r.vec(lambda: _read_var(r, ver, is_param=False))
     theme = r.string()
     custom_bg_color = rgba_to_hex(r.color())
     terrain_style = asdict(TerrainCopyStyle.read(r))
@@ -482,8 +526,11 @@ def inspect_level(filepath: str) -> dict:
     disable_replays = r.bool()
     disable_revive_pads = r.bool()
     disable_start_anim = r.bool()
+    enable_sensors = r.bool() if ver >= 23 else False
+    disable_screen_rotation = r.bool() if ver >= 23 else False
     gravity = list(r.vec2())
     replay = AuthorReplay.read(r) if r.i + 4 <= len(r.b) else AuthorReplay()
+    parsed_replay = replay.parse()
 
     return {
         "exopy_meta": exopy_meta,
@@ -506,8 +553,9 @@ def inspect_level(filepath: str) -> dict:
             "laps": ld_laps,
             "center_camera": center_camera,
             "scripts": legacy_scripts,
-            "v19_script_extra": v19_extra,
+            "unknown2": unknown2,
             "nova_scripts": nova_scripts,
+            "unknown3": unknown3,
             "global_variables": global_vars,
             "theme": theme,
             "custom_background_color": custom_bg_color,
@@ -518,9 +566,16 @@ def inspect_level(filepath: str) -> dict:
             "disable_replays": disable_replays,
             "disable_revive_pads": disable_revive_pads,
             "disable_start_animation": disable_start_anim,
+            "enable_sensors": enable_sensors,
+            "disable_screen_rotation": disable_screen_rotation,
             "gravity": gravity,
         },
-        "author_replay_bytes": len(replay.data),
+        "author_replay": {
+            "byte_length": len(replay.data),
+            "version": parsed_replay.version,
+            "total_time_ms": parsed_replay.total_time_ms,
+            "frame_count": len(parsed_replay.frames),
+        },
     }
 
 
@@ -641,9 +696,15 @@ def decompile(
         lvl_settings["CenterCamera"] = r.bool()
         legacy_scripts = r.vec(r.i32)
         if ver >= 19:
-            lvl_settings["_V19ScriptExtra"] = r.i32()
+            u2 = r.raw(4)
+            if u2 != b"\x00\x00\x00\x00":
+                lvl_settings["_Unknown2"] = u2
         nova_scripts = r.vec(lambda: _read_script(r, ver))
-        global_vars = r.vec(lambda: _read_var(r, ver))
+        if ver >= 23:
+            u3 = r.raw(4)
+            if u3 != b"\x00\x00\x00\x00":
+                lvl_settings["_Unknown3"] = u3
+        global_vars = r.vec(lambda: _read_var(r, ver, is_param=False))
 
         raw_theme = r.string().strip().lower()
         theme = raw_theme.capitalize() if raw_theme in ("mountains", "halloween", "christmas", "custom") else "Mountains"
@@ -661,6 +722,9 @@ def decompile(
         lvl_settings["DisableReplays"] = r.bool()
         lvl_settings["DisableRevivePads"] = r.bool()
         lvl_settings["DisableStartAnim"] = r.bool()
+        if ver >= 23:
+            lvl_settings["EnableSensors"] = r.bool()
+            lvl_settings["DisableScreenRotation"] = r.bool()
         gravity = r.vec2()
         if r.i + 4 <= len(r.b):
             author_replay = AuthorReplay.read(r)
@@ -797,17 +861,31 @@ def decompile(
         lines.append("")
         lines.append("# --- Global Variables ---")
         for v in global_vars:
-            lines.append(f"var_{v['id']} = exovar.Variable({v['id']}, {v['name']!r}, {v['stype']}, {_fmt_nova(v['init'])})")
+            u4_arg = f", unknown4={v['u4']!r}" if v.get("u4", b"\x00\x00\x00\x00") != b"\x00\x00\x00\x00" else ""
+            lines.append(f"var_{v['id']} = exovar.Variable({v['id']}, {v['name']!r}, {v['stype']}, {_fmt_nova(v['init'])}{u4_arg})")
             lines.append(f"Level.global_variables.append(var_{v['id']})")
 
     if nova_scripts:
         lines.append("")
         lines.append("# --- ExoScripts & Functions ---")
         used_names = set()
+        script_entries = []
+        fn_lookup = {}
         for idx, sc in enumerate(nova_scripts):
             base = _safe_ident(sc["name"], f"script_{idx+1}")
             sv = base if base not in used_names else f"{base}_{idx+1}"
             used_names.add(sv)
+            script_entries.append((sv, sc))
+            if sc["is_fn"]:
+                fn_lookup[sc["id"]] = {
+                    "var": sv,
+                    "param_ids": [p["id"] for p in sc["params"]],
+                }
+
+        ordered_scripts = [e for e in script_entries if e[1]["is_fn"]] + [
+            e for e in script_entries if not e[1]["is_fn"]
+        ]
+        for sv, sc in ordered_scripts:
             c_args = [repr(sc["name"])]
             if sc["is_fn"]:
                 c_args.append("is_function=True")
@@ -825,8 +903,9 @@ def decompile(
             for p in sc["params"]:
                 lines.append(f"{sv}.parameters.append(exovar.Parameter({p['id']}, {p['name']!r}, {p['stype']}, {_fmt_nova(p['init'])}))")
             for lv in sc["vars"]:
-                lines.append(f"{sv}.variables.append(exovar.Variable({lv['id']}, {lv['name']!r}, {lv['stype']}, {_fmt_nova(lv['init'])}))")
-            lines.extend(_emit_actions(sc["actions"], sv))
+                u4_arg = f", unknown4={lv['u4']!r}" if lv.get("u4", b"\x00\x00\x00\x00") != b"\x00\x00\x00\x00" else ""
+                lines.append(f"{sv}.variables.append(exovar.Variable({lv['id']}, {lv['name']!r}, {lv['stype']}, {_fmt_nova(lv['init'])}{u4_arg}))")
+            lines.extend(_emit_actions(sc["actions"], sv, fn_lookup=fn_lookup))
             lines.append(f"{sv}.pack()")
             lines.append("")
 
