@@ -54,17 +54,20 @@ OBJECT_PROPERTIES = {
     "EmitterTotalAngle": (64, "f32"), "SizeMin": (65, "f32"), "SizeMax": (66, "f32"),
     "SizeOverLifetime": (67, "bool"), "StartSizeMultiplier": (68, "f32"),
     "EndSizeMultiplier": (69, "f32"), "SpeedMin": (71, "f32"), "SpeedMax": (72, "f32"),
-    "SpeedLimit": (73, "f32"), "SpeedDampen": (74, "f32"), "RotationMin": (75, "f32"),
-    "RotationMax": (76, "f32"), "RotationSpeed": (77, "f32"), "ColorOverLifetime": (78, "bool"),
+    "SpeedLimit": (73, "f32"), "SpeeLimit": (73, "f32"), "SpeedDampen": (74, "f32"),
+    "RotationMin": (75, "f32"), "RotationMax": (76, "f32"), "RotationSpeed": (77, "f32"),
+    "Rotationspeed": (77, "f32"), "ColorOverLifetime": (78, "bool"),
     "StartColorMultiplier": (79, "color"), "EndColorMultiplier": (80, "color"),
     "GravityMultiplier": (81, "f32"), "AnchorPos": (82, "vec2"),
     "MoonInnerRadius": (83, "f32"), "MoonOffset": (84, "f32"),
 }
 
+
 class StaticType:
     Bool, Int, Float, String, Color, Vector = 0, 1, 2, 3, 4, 5
     Sound, Music, Object, ObjectSet, Transition = 6, 7, 8, 9, 10
     Easing, Sprite, Script, Layer = 11, 12, 13, 14
+
 
 class DynamicType:
     BoolConstant = 0
@@ -266,6 +269,22 @@ class DynamicType:
     IntStringLength = 196
 
 
+class ActionID:
+    Repeat, RepeatWhile, ConditionBlock, Wait, WaitFrames = 0, 1, 2, 3, 4
+    Move, Scale, Rotate, RotateAround = 5, 6, 7, 8
+    SetVariable, ResetVariable, ResetObject = 9, 10, 11
+    SetColor, SetTransparency, SetSecondaryColor, SetSecondaryTransparency = 12, 13, 14, 15
+    SetBorderColor, SetBorderTransparency, SetSprite, SetText, SetEnabled = 16, 17, 18, 19, 20
+    Activate, Deactivate, Damage, Kill, GameFinish = 21, 22, 23, 24, 25
+    CameraPan, CameraFollowPlayer, CameraZoom, CameraZoomReset = 26, 27, 28, 29
+    CameraOffset, CameraOffsetReset, CameraShake = 30, 31, 32
+    PlaySound, PlayMusic, SetDirection, SetGravity, SetVelocity = 33, 34, 35, 36, 37
+    SetCinematic, SetInputEnabled, SetTimerEnabled, GameTextShow = 38, 39, 40, 41
+    DialogueShow, StopScript, TransitionIn, TransitionOut, TimeScale = 42, 43, 44, 45, 46
+    RunFunction, SetVariableOverTime, RepeatForEachObject = 47, 48, 49
+    StopSound, PlayParticleSystem, StopParticleSystem = 50, 51, 52
+
+
 class OldActionType:
     RunScript = 0
     StopScripts = 1
@@ -295,19 +314,3 @@ class OldActionType:
     Finish = 25
     SetGravity = 26
     SetVelocity = 27
-
-
-class ActionID:
-    Repeat, RepeatWhile, ConditionBlock, Wait, WaitFrames = 0, 1, 2, 3, 4
-    Move, Scale, Rotate, RotateAround = 5, 6, 7, 8
-    SetVariable, ResetVariable, ResetObject = 9, 10, 11
-    SetColor, SetTransparency, SetSecondaryColor, SetSecondaryTransparency = 12, 13, 14, 15
-    SetBorderColor, SetBorderTransparency, SetSprite, SetText, SetEnabled = 16, 17, 18, 19, 20
-    Activate, Deactivate, Damage, Kill, GameFinish = 21, 22, 23, 24, 25
-    CameraPan, CameraFollowPlayer, CameraZoom, CameraZoomReset = 26, 27, 28, 29
-    CameraOffset, CameraOffsetReset, CameraShake = 30, 31, 32
-    PlaySound, PlayMusic, SetDirection, SetGravity, SetVelocity = 33, 34, 35, 36, 37
-    SetCinematic, SetInputEnabled, SetTimerEnabled, GameTextShow = 38, 39, 40, 41
-    DialogueShow, StopScript, TransitionIn, TransitionOut, TimeScale = 42, 43, 44, 45, 46
-    RunFunction, SetVariableOverTime, RepeatForEachObject = 47, 48, 49
-    StopSound, PlayParticleSystem, StopParticleSystem = 50, 51, 52
