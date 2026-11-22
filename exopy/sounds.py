@@ -1,5 +1,4 @@
 import audioop
-import cmath
 import math
 import os
 import shutil
@@ -140,6 +139,54 @@ def _read_pcm_mono(filepath: str, target_rate: int = 16000) -> Tuple[int, List[f
     return framerate, samples
 
 
+def _extract_peaks(
+    mags: List[float],
+    min_bin: int,
+    max_bin: int,
+    rate: int,
+    win_size: int,
+    base_freq_hz: float,
+    base_vol: float,
+    polyphony: int,
+    quantize_semitones: bool,
+) -> List[Tuple[float, float]]:
+    work = list(mags)
+    voices: List[Tuple[float, float]] = []
+    top_mag = 0.0
+
+    for v_idx in range(max(1, int(polyphony))):
+        best_bin = max(range(min_bin, max_bin + 1), key=lambda k: work[k])
+        peak_mag = work[best_bin]
+        if peak_mag <= 1e-6:
+            break
+        if v_idx == 0:
+            top_mag = peak_mag
+        elif peak_mag < top_mag * 0.28:
+            break
+
+        y0, y1, y2 = work[best_bin - 1], work[best_bin], work[best_bin + 1]
+        denom = y0 - 2.0 * y1 + y2
+        delta = 0.5 * (y0 - y2) / denom if abs(denom) > 1e-12 else 0.0
+        freq = (best_bin + delta) * rate / win_size
+
+        semi = max(-36.0, min(36.0, freq_to_semitones(freq, base_freq_hz=base_freq_hz)))
+        semi = round(semi, 1) if quantize_semitones else round(semi, 2)
+        ratio = (peak_mag / top_mag) if top_mag > 0 else 1.0
+        vol = round(min(1.0, max(0.08, base_vol * ratio)), 2)
+
+        if not any(abs(existing_s - semi) < 0.6 for existing_s, _ in voices):
+            voices.append((semi, vol))
+
+        # Suppress neighborhood + integer overtones so secondary voices pick distinct notes
+        for harm in (1, 2, 3, 4):
+            center = int(round(best_bin * harm))
+            radius = max(2, int(round(best_bin * 0.06 * harm)))
+            for b in range(max(1, center - radius), min(len(work) - 1, center + radius + 1)):
+                work[b] = 0.0
+
+    return voices
+
+
 def analyze_audio(
     filepath: str,
     *,
@@ -148,13 +195,13 @@ def analyze_audio(
     min_freq_hz: float = 65.0,
     max_freq_hz: float = 2093.0,
     silence_threshold: float = 0.03,
+    polyphony: int = 1,
     quantize_semitones: bool = True,
     max_duration: Optional[float] = None,
-) -> List[Tuple[float, Optional[float], float]]:
+) -> List[Tuple[float, List[Tuple[float, float]]]]:
     """
-    Analyze an audio file into `(wait_sec, semitones_or_None, volume)` frames.
-    Consecutive frames with identical quantized pitch and similar volume are merged
-    to keep the generated Exoracer script compact.
+    Analyze an audio file into `(wait_sec, [(semitones, volume), ...])` frames.
+    When `polyphony > 1`, multiple simultaneous pitch voices are extracted per frame.
     """
     rate, samples = _read_pcm_mono(filepath, target_rate=16000)
     if max_duration is not None:
@@ -165,7 +212,7 @@ def analyze_audio(
     hann = [0.5 * (1.0 - math.cos(2.0 * math.pi * i / (win_size - 1))) for i in range(win_size)]
 
     peak_amp = max((abs(s) for s in samples), default=1.0) or 1.0
-    raw_frames: List[Tuple[float, Optional[float], float]] = []
+    raw_frames: List[Tuple[float, List[Tuple[float, float]]]] = []
 
     for start in range(0, len(samples), hop):
         chunk = samples[start : start + win_size]
@@ -173,7 +220,7 @@ def analyze_audio(
             break
         rms = math.sqrt(sum(x * x for x in chunk) / len(chunk)) / peak_amp
         if rms < silence_threshold:
-            raw_frames.append((step_sec, None, 0.0))
+            raw_frames.append((step_sec, []))
             continue
 
         padded = [
@@ -183,35 +230,31 @@ def analyze_audio(
         mags = _fft_magnitudes(padded)
         min_bin = max(1, int(min_freq_hz * win_size / rate))
         max_bin = min(len(mags) - 2, int(max_freq_hz * win_size / rate))
+        base_vol = min(1.0, max(0.1, rms * 1.6))
 
-        best_bin = max(range(min_bin, max_bin + 1), key=lambda k: mags[k])
-        # Parabolic interpolation around peak FFT bin for sub-bin pitch accuracy
-        y0, y1, y2 = mags[best_bin - 1], mags[best_bin], mags[best_bin + 1]
-        denom = y0 - 2.0 * y1 + y2
-        delta = 0.5 * (y0 - y2) / denom if abs(denom) > 1e-12 else 0.0
-        freq = (best_bin + delta) * rate / win_size
+        voices = _extract_peaks(
+            mags, min_bin, max_bin, rate, win_size,
+            base_freq_hz, base_vol, polyphony, quantize_semitones,
+        )
+        raw_frames.append((step_sec, voices))
 
-        semi = freq_to_semitones(freq, base_freq_hz=base_freq_hz)
-        semi = max(-36.0, min(36.0, semi))
-        if quantize_semitones:
-            semi = round(semi, 1)
-        else:
-            semi = round(semi, 2)
-        vol = round(min(1.0, max(0.1, rms * 1.6)), 2)
-        raw_frames.append((step_sec, semi, vol))
-
-    # Merge adjacent identical notes / rests so scripts stay small and clean
-    merged: List[Tuple[float, Optional[float], float]] = []
-    for dur, semi, vol in raw_frames:
+    merged: List[Tuple[float, List[Tuple[float, float]]]] = []
+    for dur, voices in raw_frames:
         if merged:
-            prev_dur, prev_semi, prev_vol = merged[-1]
-            if semi is None and prev_semi is None:
-                merged[-1] = (round(prev_dur + dur, 4), None, 0.0)
+            prev_dur, prev_voices = merged[-1]
+            if not voices and not prev_voices:
+                merged[-1] = (round(prev_dur + dur, 4), [])
                 continue
-            if semi is not None and prev_semi is not None and abs(semi - prev_semi) <= 0.25 and abs(vol - prev_vol) <= 0.12:
-                merged[-1] = (round(prev_dur + dur, 4), prev_semi, prev_vol)
+            if (
+                len(voices) == len(prev_voices)
+                and all(
+                    abs(s1 - s2) <= 0.25 and abs(v1 - v2) <= 0.12
+                    for (s1, v1), (s2, v2) in zip(voices, prev_voices)
+                )
+            ):
+                merged[-1] = (round(prev_dur + dur, 4), prev_voices)
                 continue
-        merged.append((round(dur, 4), semi, vol))
+        merged.append((round(dur, 4), voices))
     return merged
 
 
@@ -223,19 +266,17 @@ def audio_to_script(
     activator: Optional[int] = 0,
     step_sec: float = 0.06,
     base_freq_hz: float = 261.625565,
+    polyphony: int = 1,
     volume_scale: float = 1.0,
     loop: int = 0,
     max_duration: Optional[float] = None,
     pack: bool = True,
 ):
-    """
-    Convert an audio file directly into a native Exoracer Script using `PlaySound`
-    + `FloatSemitones` pitch modulation.
-    """
     events = analyze_audio(
         filepath,
         step_sec=step_sec,
         base_freq_hz=base_freq_hz,
+        polyphony=polyphony,
         max_duration=max_duration,
     )
     sc = exoscript.create(name)
@@ -243,10 +284,11 @@ def audio_to_script(
         sc.on(activator)
 
     blk = exoscript.block()
-    for dur, semi, vol in events:
-        if semi is not None and vol > 0.0:
-            v = round(min(1.0, vol * float(volume_scale)), 3)
-            blk.play_sound(sound_id, volume=v, pitch=exovar.semitones(semi))
+    for dur, voices in events:
+        for semi, vol in voices:
+            if vol > 0.0:
+                v = round(min(1.0, vol * float(volume_scale)), 3)
+                blk.play_sound(sound_id, volume=v, pitch=exovar.semitones(semi))
         if dur > 0.0:
             blk.wait(dur)
 
@@ -266,19 +308,17 @@ def audio_to_python(
     activator: int = 0,
     step_sec: float = 0.06,
     base_freq_hz: float = 261.625565,
+    polyphony: int = 1,
     volume_scale: float = 1.0,
     loop: int = 0,
     max_duration: Optional[float] = None,
     out_py: Optional[str] = None,
 ) -> str:
-    """
-    Convert an audio file into ready-to-paste Python code using `exopython`
-    so you can drop custom audio/music straight into any level script.
-    """
     events = analyze_audio(
         filepath,
         step_sec=step_sec,
         base_freq_hz=base_freq_hz,
+        polyphony=polyphony,
         max_duration=max_duration,
     )
     lines = [
@@ -290,10 +330,11 @@ def audio_to_python(
     if loop > 0:
         lines.append(f"{target} = exoscript.block()")
 
-    for dur, semi, vol in events:
-        if semi is not None and vol > 0.0:
-            v = round(min(1.0, vol * float(volume_scale)), 3)
-            lines.append(f"{target}.play_sound({sound_id!r}, volume={v}, pitch=exovar.semitones({semi}))")
+    for dur, voices in events:
+        for semi, vol in voices:
+            if vol > 0.0:
+                v = round(min(1.0, vol * float(volume_scale)), 3)
+                lines.append(f"{target}.play_sound({sound_id!r}, volume={v}, pitch=exovar.semitones({semi}))")
         if dur > 0.0:
             lines.append(f"{target}.wait({dur})")
 
