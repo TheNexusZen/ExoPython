@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exopython"
-version = "1.1.0"
+version = "1.1.1"
 description = "level builder, decompiler, image converter, and obfuscator for Exoracer (.exolvl) in python"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -15,7 +15,7 @@ dependencies = []
 image = ["Pillow>=9.0.0"]
 
 [tool.setuptools.packages.find]
-include = ["exopy*"]
+include = ["exopy*", "exopython*"]
 
 [project.urls]
 Homepage = "https://github.com/TheNexusZen/ExoPython"
