@@ -385,7 +385,13 @@ def _read_script(r: BinaryReader, ver: int = 18) -> dict:
     }
 
 
-def decompile(filepath: str, out_py: str = None, generator_mode: bool = None, include_meta: bool = False):
+def decompile(
+    filepath: str,
+    out_py: str = None,
+    generator_mode: bool = None,
+    include_meta: bool = False,
+    extract_assets: bool = False,
+):
     with open(filepath, "rb") as f:
         raw = f.read()
 
@@ -521,11 +527,16 @@ def decompile(filepath: str, out_py: str = None, generator_mode: bool = None, in
         tail_note = f"Partial tail parse ({e})"
 
     base_name = os.path.splitext(os.path.basename(filepath))[0]
+    if out_py is None:
+        out_py = f"{base_name}_exopy.py"
+    asset_dir = os.path.join(os.path.dirname(os.path.abspath(out_py)), f"{base_name}_assets")
+
     lines = [
         f"# Decompiled from {os.path.basename(filepath)} (format v{ver})",
         "import exopy as exo",
         "from exopy import scripts as exoscript",
         "from exopy import variables as exovar",
+        "from exopy.types_ext import Brush, BrushGrid, BrushObject, Pattern, Prefab, RawObject",
         "",
         f"Settings = {lvl_settings!r}",
         f"Level = exo.init({name!r}, {theme!r}, {laps}, {gravity!r}, Settings)",
@@ -542,6 +553,54 @@ def decompile(filepath: str, out_py: str = None, generator_mode: bool = None, in
     if len(layers) > 1:
         lines.append("")
 
+    # --- Patterns ---
+    if patterns:
+        lines.append("# --- Patterns ---")
+        for pat in patterns:
+            if extract_assets:
+                os.makedirs(asset_dir, exist_ok=True)
+                frame_exprs = []
+                for fi, frame_bytes in enumerate(pat.pattern_frames):
+                    fname = f"pattern_{pat.pattern_id}_f{fi}.png"
+                    fpath = os.path.join(asset_dir, fname)
+                    with open(fpath, "wb") as af:
+                        af.write(frame_bytes)
+                    frame_exprs.append(f"open({fpath!r}, 'rb').read()")
+                lines.append(f"Level.patterns.append(Pattern(pattern_id={pat.pattern_id}, pattern_frames=[{', '.join(frame_exprs)}]))")
+            else:
+                lines.append(f"Level.patterns.append({pat!r})")
+        lines.append("")
+
+    # --- Prefabs ---
+    if prefabs:
+        lines.append("# --- Prefabs ---")
+        for pf in prefabs:
+            if extract_assets and pf.prefab_image_data:
+                os.makedirs(asset_dir, exist_ok=True)
+                fpath = os.path.join(asset_dir, f"prefab_{pf.prefab_id}.png")
+                with open(fpath, "wb") as af:
+                    af.write(pf.prefab_image_data)
+                lines.append(f"Level.prefabs.append(Prefab(prefab_id={pf.prefab_id}, prefab_image_data=open({fpath!r}, 'rb').read(), items={pf.items!r}))")
+            else:
+                lines.append(f"Level.prefabs.append({pf!r})")
+        lines.append("")
+
+    # --- Brushes ---
+    if brushes:
+        lines.append("# --- Brushes ---")
+        for br in brushes:
+            lines.append(f"Level.brushes.append({br!r})")
+        lines.append("")
+
+    # --- Legacy Scripts & Author Replay ---
+    if legacy_scripts:
+        lines.append(f"Level.legacy_scripts = {legacy_scripts!r}")
+    if author_replay.data:
+        lines.append(f"Level.author_replay.data = {author_replay.data!r}")
+    if legacy_scripts or author_replay.data:
+        lines.append("")
+
+    # --- Objects ---
     for eid, tid, prefab_eid, prefab_id, pos, scale, rot, tag, props, layer, in_group, group_members in objects:
         tile_arg = repr(_ID_TO_TILE[tid]) if tid in _ID_TO_TILE else str(tid)
         cfg = {}
@@ -618,8 +677,6 @@ def decompile(filepath: str, out_py: str = None, generator_mode: bool = None, in
     if is_obf and not owner_unlocked:
         code = _pack_obfuscated_py(code, uid)
 
-    if out_py is None:
-        out_py = f"{base_name}_exopy.py"
     with open(out_py, "w", encoding="utf-8") as f:
         f.write(code)
 
