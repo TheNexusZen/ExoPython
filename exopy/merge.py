@@ -1,14 +1,14 @@
 import copy
 import gzip
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from . import _state
-from .binary import BinaryReader, rgba_to_hex
-from .constants import DynamicType, OBJECT_PROPERTIES
-from .decompile import _read_action, _read_script, _read_var, read_exopy_meta
+from .binary import BinaryReader
+from .constants import DynamicType
+from .decompile import _read_script, _read_var, read_exopy_meta
 from .errors import WrongMagicError
 from .scripts import Action, Activator, CallParameter, FunctionCall, Script
 from .types_ext import (
-    Brush, BrushGrid, BrushObject, LegacyTileLayers, LocalLevel,
+    Brush, BrushGrid, LegacyTileLayers, LocalLevel,
     Pattern, Prefab, RawObject,
 )
 from .variables import NovaValue, Parameter, Variable
@@ -24,6 +24,8 @@ def _remap_nova_dict(nv: dict, maps: dict) -> NovaValue:
         int_val = maps["entity"][int_val]
     elif dt == DynamicType.ObjectSetConstant and int_list is not None:
         int_list = [maps["entity"].get(eid, eid) for eid in int_list]
+    elif dt == DynamicType.PrefabConstant and int_val in maps["prefab"]:
+        int_val = maps["prefab"][int_val]
     elif dt in (
         DynamicType.BoolVariable, DynamicType.IntVariable, DynamicType.FloatVariable,
         DynamicType.StringVariable, DynamicType.ColorVariable, DynamicType.VectorVariable,
@@ -55,6 +57,8 @@ def _remap_nova_dict(nv: dict, maps: dict) -> NovaValue:
         vector_value=nv["v"],
         int_list_value=int_list,
         sub_values=subs,
+        unknown5=nv.get("u5", b"\x00"),
+        unknown6=nv.get("u6", b"\x00\x00\x00\x00"),
     )
 
 
@@ -102,7 +106,14 @@ def _rebuild_action(act: dict, maps: dict) -> Action:
     if aid == 49:
         tgt = rn(act["target"])
         sub_acts = [_rebuild_action(a, maps) for a in act["actions"]]
-        return Action(aid, lambda w, ver: (tgt._write_to(w, ver), w.write_vec(sub_acts, lambda x: x._write_to(w, ver))), wait=wait, closed=closed)
+        def _write_fe(w, ver):
+            if ver >= 23:
+                w.write_vec(sub_acts, lambda x: x._write_to(w, ver))
+                tgt._write_to(w, ver)
+            else:
+                tgt._write_to(w, ver)
+                w.write_vec(sub_acts, lambda x: x._write_to(w, ver))
+        return Action(aid, _write_fe, wait=wait, closed=closed)
 
     fields = [rn(f) for f in act.get("fields", [])]
     return Action(aid, lambda w, ver: [f._write_to(w, ver) for f in fields], wait=wait, closed=closed)
@@ -154,9 +165,11 @@ def _parse_raw_level(filepath: str) -> dict:
     r.bool()
     r.vec(r.i32)
     if ver >= 19:
-        r.i32()
+        r.raw(4)
     nova_scripts = r.vec(lambda: _read_script(r, ver))
-    global_vars = r.vec(lambda: _read_var(r, ver))
+    if ver >= 23:
+        r.raw(4)
+    global_vars = r.vec(lambda: _read_var(r, ver, is_param=False))
 
     return {
         "objects": objects,
@@ -178,11 +191,6 @@ def merge_level(
     merge_scripts: bool = True,
     tag_filter: Optional[str] = None,
 ) -> dict:
-    """
-    Merge another `.exolvl` file into the active level, offsetting object positions
-    by `offset=(dx, dy)` and remapping all entity, layer, pattern, prefab, variable,
-    parameter, and script IDs to prevent collisions.
-    """
     from . import GameObject, Layer
 
     lvl = _state.get_level()
@@ -199,7 +207,6 @@ def merge_level(
         "script": {},
     }
 
-    # 1. Remap Layers
     if merge_layers:
         for linfo in src["layers"]:
             old_lid = linfo["layer_id"]
@@ -219,13 +226,11 @@ def merge_level(
         for linfo in src["layers"]:
             maps["layer"][linfo["layer_id"]] = lvl.layers[0].layer_id
 
-    # 2. Remap Patterns
     for pat in src["patterns"]:
         new_pid = lvl._next_pattern_id()
         maps["pattern"][pat.pattern_id] = new_pid
         lvl.patterns.append(Pattern(pattern_id=new_pid, pattern_frames=list(pat.pattern_frames)))
 
-    # 3. Allocate new Entity IDs & Prefab IDs
     selected_objs = [
         o for o in src["objects"]
         if o.tag != "__EXOPY_META__" and (tag_filter is None or o.tag == tag_filter)
@@ -245,12 +250,11 @@ def merge_level(
             remapped_items.append(it_copy)
         lvl.prefabs.append(Prefab(prefab_id=new_pf_id, prefab_image_data=pf.prefab_image_data, items=remapped_items))
 
-    # 4. Instantiate & Remap Objects
     created_objects = []
     for raw_obj in selected_objs:
         gobj = GameObject(raw_obj.tile_id, (raw_obj.position[0] + ox, raw_obj.position[1] + oy), lvl)
         gobj.entity_id = maps["entity"][raw_obj.entity_id]
-        lvl._eid -= 1  # ID already allocated in step 3
+        lvl._eid -= 1
         gobj.prefab_entity_id = maps["entity"].get(raw_obj.prefab_entity_id, raw_obj.prefab_entity_id)
         gobj.prefab_id = maps["prefab"].get(raw_obj.prefab_id, raw_obj.prefab_id)
         gobj.scale = raw_obj.scale
@@ -271,7 +275,6 @@ def merge_level(
         gobj.pack()
         created_objects.append(gobj)
 
-    # 5. Remap Brushes
     for br in src["brushes"]:
         new_bid = lvl._next_brush_id()
         b_objs = []
@@ -287,16 +290,14 @@ def merge_level(
             objects=b_objs,
         ))
 
-    # 6. Remap Global Variables, Scripts, Parameters & Local Variables
     created_scripts = []
     if merge_scripts:
         for gv in src["global_variables"]:
             new_vid = lvl._next_var_id()
             maps["var"][gv["id"]] = new_vid
             init_nv = _remap_nova_dict(gv["init"], maps)
-            lvl.global_variables.append(Variable(new_vid, gv["name"], gv["stype"], init_nv))
+            lvl.global_variables.append(Variable(new_vid, gv["name"], gv["stype"], init_nv, unknown4=gv.get("u4", b"\x00\x00\x00\x00")))
 
-        # Pre-allocate all script_ids, parameter_ids, and local var_ids first
         for sc in src["nova_scripts"]:
             maps["script"][sc["id"]] = lvl._next_script_id()
             for p in sc["params"]:
@@ -312,7 +313,7 @@ def merge_level(
                 condition=_remap_nova_dict(sc["cond"], maps),
             )
             new_sc.script_id = maps["script"][sc["id"]]
-            lvl._sid -= 1  # Already allocated above
+            lvl._sid -= 1
 
             for act_t, act_p in sc["activators"]:
                 new_sc.activation_list.append(Activator(act_t, [_remap_nova_dict(p, maps) for p in act_p]))
@@ -322,7 +323,7 @@ def merge_level(
                 )
             for lv in sc["vars"]:
                 new_sc.variables.append(
-                    Variable(maps["var"][lv["id"]], lv["name"], lv["stype"], _remap_nova_dict(lv["init"], maps))
+                    Variable(maps["var"][lv["id"]], lv["name"], lv["stype"], _remap_nova_dict(lv["init"], maps), unknown4=lv.get("u4", b"\x00\x00\x00\x00"))
                 )
             new_sc.actions = [_rebuild_action(a, maps) for a in sc["actions"]]
             new_sc.pack()
@@ -336,10 +337,6 @@ def merge_level(
 
 
 def extract_prefab(filepath: str, tag: Optional[str] = None, preview_image=None) -> Prefab:
-    """
-    Extract objects (optionally filtered by `tag`) from an `.exolvl` file and register
-    them as a reusable `Prefab` in the active level.
-    """
     from . import CreatePrefab
 
     src = _parse_raw_level(filepath)
