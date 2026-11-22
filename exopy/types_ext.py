@@ -1,9 +1,14 @@
+import uuid
 from dataclasses import dataclass, field
 from typing import List, Tuple
-from .binary import BinaryReader, BinaryWriter, rgba_to_hex
-from .constants import OBJECT_PROPERTIES
+from .binary import BinaryReader, BinaryWriter, now_cs_ticks, rgba_to_hex
+from .constants import OBJECT_PROPERTIES, OldActionType
+from .errors import InvalidObjectPropertyError, InvalidOldActionTypeError
 
 _ID_TO_PROP = {pid: (name, ptype) for name, (pid, ptype) in OBJECT_PROPERTIES.items()}
+_VALID_OLD_ACTION_TYPES = {
+    v for k, v in vars(OldActionType).items() if not k.startswith("_") and isinstance(v, int)
+}
 
 
 def read_prop_list(r: BinaryReader) -> List[Tuple[str, object]]:
@@ -11,6 +16,8 @@ def read_prop_list(r: BinaryReader) -> List[Tuple[str, object]]:
     props = []
     for _ in range(count):
         pid = r.i32()
+        if pid not in _ID_TO_PROP:
+            raise InvalidObjectPropertyError(pid)
         name, ptype = _ID_TO_PROP[pid]
         if ptype == "color":
             val = rgba_to_hex(r.color())
@@ -29,7 +36,7 @@ def read_prop_list(r: BinaryReader) -> List[Tuple[str, object]]:
         elif ptype == "tcorners":
             val = r.vec(lambda: r.vec(r.vec2))
         else:
-            raise KeyError(f"Unhandled property type: {ptype}")
+            raise InvalidObjectPropertyError(ptype)
         props.append((name, val))
     return props
 
@@ -37,6 +44,8 @@ def read_prop_list(r: BinaryReader) -> List[Tuple[str, object]]:
 def write_prop_list(w: BinaryWriter, props: List[Tuple[str, object]]):
     w.write_i32(len(props))
     for name, val in props:
+        if name not in OBJECT_PROPERTIES:
+            raise InvalidObjectPropertyError(name)
         pid, pt = OBJECT_PROPERTIES[name]
         w.write_i32(pid)
         if pt == "color":
@@ -235,23 +244,29 @@ class OldAction:
 
     @classmethod
     def read(cls, r: BinaryReader) -> "OldAction":
+        atype = r.i32()
+        if atype not in _VALID_OLD_ACTION_TYPES:
+            raise InvalidOldActionTypeError(atype)
         return cls(
-            action_type=r.i32(),
+            action_type=atype,
             wait=r.bool(),
             properties=r.vec(lambda: OldActionProperty.read(r)),
         )
 
     def write(self, w: BinaryWriter):
-        w.write_i32(self.action_type)
+        atype = int(self.action_type)
+        if atype not in _VALID_OLD_ACTION_TYPES:
+            raise InvalidOldActionTypeError(atype)
+        w.write_i32(atype)
         w.write_bool(self.wait)
         w.write_vec(self.properties, lambda p: p.write(w))
 
 
 @dataclass
 class OldScript:
-    script_id: str
-    name: str
-    creation_date_ticks: int
+    script_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = "New Script"
+    creation_date_ticks: int = field(default_factory=now_cs_ticks)
     actions: List[OldAction] = field(default_factory=list)
 
     @classmethod
@@ -264,10 +279,81 @@ class OldScript:
         )
 
     def write(self, w: BinaryWriter):
-        w.write_str(self.script_id)
+        w.write_str(str(self.script_id))
         w.write_str(self.name)
-        w.write_i64(self.creation_date_ticks)
+        w.write_i64(int(self.creation_date_ticks))
         w.write_vec(self.actions, lambda a: a.write(w))
+
+    def to_bytes(self) -> bytes:
+        w = BinaryWriter()
+        self.write(w)
+        return w.to_bytes()
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "OldScript":
+        return cls.read(BinaryReader(data))
+
+
+@dataclass
+class LocalLevel:
+    serialization_version: int = 18
+    level_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    level_version: int = 1
+    level_name: str = "New level"
+    thumbnail: str = ""
+    creation_date_ticks: int = field(default_factory=now_cs_ticks)
+    update_date_ticks: int = field(default_factory=now_cs_ticks)
+    author_time: int = 0
+    author_lap_times: List[int] = field(default_factory=list)
+    silver_medal_time: int = 0
+    gold_medal_time: int = 0
+    laps: int = 1
+    private: bool = False
+    nova_level: bool = True
+
+    @classmethod
+    def read(cls, r: BinaryReader) -> "LocalLevel":
+        return cls(
+            serialization_version=r.i32(),
+            level_id=r.string(),
+            level_version=r.i32(),
+            level_name=r.string(),
+            thumbnail=r.string(),
+            creation_date_ticks=r.i64(),
+            update_date_ticks=r.i64(),
+            author_time=r.i64(),
+            author_lap_times=r.vec(r.i64),
+            silver_medal_time=r.i64(),
+            gold_medal_time=r.i64(),
+            laps=r.i32(),
+            private=r.bool(),
+            nova_level=r.bool(),
+        )
+
+    def write(self, w: BinaryWriter):
+        w.write_i32(self.serialization_version)
+        w.write_str(str(self.level_id))
+        w.write_i32(self.level_version)
+        w.write_str(self.level_name)
+        w.write_str(self.thumbnail)
+        w.write_i64(int(self.creation_date_ticks))
+        w.write_i64(int(self.update_date_ticks))
+        w.write_i64(int(self.author_time))
+        w.write_vec(self.author_lap_times, w.write_i64)
+        w.write_i64(int(self.silver_medal_time))
+        w.write_i64(int(self.gold_medal_time))
+        w.write_i32(self.laps)
+        w.write_bool(self.private)
+        w.write_bool(self.nova_level)
+
+    def to_bytes(self) -> bytes:
+        w = BinaryWriter()
+        self.write(w)
+        return w.to_bytes()
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "LocalLevel":
+        return cls.read(BinaryReader(data))
 
 
 @dataclass
