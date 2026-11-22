@@ -1,7 +1,8 @@
-import gzip, hashlib, os, secrets, struct, uuid
+import gzip, hashlib, json, os, secrets, struct, uuid
+from dataclasses import asdict
 from . import _state, scripts, variables, stdlib, types_ext, errors
-from .decompile import decompile
-from .binary import BinaryWriter, parse_color
+from .decompile import decompile, inspect_level
+from .binary import BinaryWriter, now_cs_ticks, parse_color, rgba_to_hex
 from .constants import THEMES, DEFAULT_SETTINGS, TILE_IDS, OBJECT_PROPERTIES
 from .errors import (
     ExopyError, WrongMagicError, InvalidDynamicTypeError, InvalidStaticTypeError,
@@ -11,7 +12,7 @@ from .errors import (
 from .image import ExoImage, _resolve_raw_bytes
 from .types_ext import (
     AuthorReplay, Brush, BrushGrid, BrushObject,
-    LegacyTileLayers, OldAction, OldActionProperty, OldScript,
+    LegacyTileLayers, LocalLevel, OldAction, OldActionProperty, OldScript,
     Pattern, Prefab, RawObject, TerrainCopyStyle,
 )
 
@@ -29,7 +30,8 @@ def _get_or_create_key(level_uuid: str) -> str:
     if level_uuid in keys:
         return keys[level_uuid]
     new_key = secrets.token_hex(16)
-    with open(KEYS_FILE, "a", encoding="utf-8") as f:
+    fd = os.open(KEYS_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(f"{level_uuid}={new_key}\n")
     return new_key
 
@@ -54,6 +56,19 @@ class Layer:
         self.foreground_type = int(foreground_type)
         self.parallax = (float(parallax[0]), float(parallax[1]))
         self.children = []
+
+    def to_dict(self) -> dict:
+        return {
+            "layer_id": self.layer_id,
+            "layer_name": self.layer_name,
+            "selected": self.selected,
+            "invisible": self.invisible,
+            "locked": self.locked,
+            "foreground_type": self.foreground_type,
+            "parallax": list(self.parallax),
+            "fixed_size": self.fixed_size,
+            "children": list(self.children),
+        }
 
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.layer_id)
@@ -147,6 +162,9 @@ class GameObject:
             group_members=list(self.group_members),
         )
 
+    def to_dict(self) -> dict:
+        return asdict(self._to_raw_object())
+
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.entity_id)
         w.write_i32(self.tile_id)
@@ -202,6 +220,9 @@ class ExoLevel:
         self.serialization_version = int(self.settings.get("SerializationVersion", 18))
         self.level_version = int(self.settings.get("LevelVersion", 1))
         self.nova_level = bool(self.settings.get("NovaLevel", True))
+        self.creation_ticks = self.settings.get("CreationTicks")
+        self.update_ticks = self.settings.get("UpdateTicks")
+        self.v19_script_extra = int(self.settings.get("_V19ScriptExtra", 0))
 
         self.legacy_tiles = LegacyTileLayers()
         self.objects, self.layers = [], [Layer(1, "Layer 1")]
@@ -276,16 +297,41 @@ class ExoLevel:
             for vi, lv in enumerate(s.variables):
                 lv.name = _mangle(f"lv_{idx}_{vi}_{lv.variable_id}")
 
+    def to_dict(self) -> dict:
+        return {
+            "serialization_version": self.serialization_version,
+            "uuid": self.uuid,
+            "level_version": self.level_version,
+            "name": self.name,
+            "theme": self.theme,
+            "laps": self.laps,
+            "gravity": list(self.gravity),
+            "nova_level": self.nova_level,
+            "custom_background_color": rgba_to_hex(self.custom_bg_color),
+            "settings": dict(self.settings),
+            "objects": [o.to_dict() for o in self.objects],
+            "layers": [l.to_dict() for l in self.layers],
+            "global_variables": [v.to_dict() for v in self.global_variables],
+            "scripts_count": len(self.nova_scripts),
+            "prefabs_count": len(self.prefabs),
+            "brushes_count": len(self.brushes),
+            "patterns_count": len(self.patterns),
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent)
+
     def to_bytes(self) -> bytes:
+        ver = self.serialization_version
         w = BinaryWriter()
         w.write_raw(b"NYA^")
-        w.write_i32(self.serialization_version)
+        w.write_i32(ver)
         w.write_str(self.uuid)
         w.write_i32(self.level_version)
         w.write_str(self.name)
         w.write_str(self.thumbnail)
-        w.write_datetime_now()
-        w.write_datetime_now()
+        w.write_i64(int(self.creation_ticks) if self.creation_ticks is not None else now_cs_ticks())
+        w.write_i64(int(self.update_ticks) if self.update_ticks is not None else now_cs_ticks())
         author_ms = int(round(float(self.settings.get("AuthorTime", 0.0)) * 1000))
         author_laps = [int(round(float(x) * 1000)) for x in self.settings.get("AuthorLapTimes", [])]
         silver_ms = int(round(float(self.settings.get("Silver", 0.0)) * 1000))
@@ -308,7 +354,7 @@ class ExoLevel:
         w.write_vec(self.prefabs, lambda p: p.write(w))
         w.write_vec(self.brushes, lambda b: b.write(w))
         w.write_vec(self.patterns, lambda pt: pt.write(w))
-        if self.serialization_version >= 17:
+        if ver >= 17:
             w.write_vec(self.color_palette, w.write_color)
 
         w.write_i64(author_ms)
@@ -318,8 +364,10 @@ class ExoLevel:
         w.write_i32(self.laps)
         w.write_bool(self.settings["CenterCamera"])
         w.write_vec(self.legacy_scripts, w.write_i32)
-        w.write_vec(self.nova_scripts, lambda s: s._write_to(w))
-        w.write_vec(self.global_variables, lambda v: v._write_to(w))
+        if ver >= 19:
+            w.write_i32(self.v19_script_extra)
+        w.write_vec(self.nova_scripts, lambda s: s._write_to(w, ver))
+        w.write_vec(self.global_variables, lambda v: v._write_to(w, ver))
         w.write_str(self.theme)
         w.write_color(self.custom_bg_color)
         self.terrain_style.write(w)
