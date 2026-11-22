@@ -8,40 +8,53 @@ from .variables import (
     default_nova_for, resolve_static_type, return_reg,
 )
 
+
 class Activator:
     def __init__(self, activator_type: int, params=()):
         self.activator_type = int(activator_type)
         self.parameters = [as_nova(p) for p in params]
+
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.activator_type)
         w.write_vec(self.parameters, lambda p: p._write_to(w))
 
+
 class Action:
     def __init__(self, action_id: int, writer_fn, *, wait=False, closed=False):
         self.action_id, self.writer_fn, self.wait, self.closed = int(action_id), writer_fn, bool(wait), bool(closed)
+
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.action_id); w.write_bool(self.closed); w.write_bool(self.wait)
+        w.write_i32(self.action_id)
+        w.write_bool(self.closed)
+        w.write_bool(self.wait)
         self.writer_fn(w)
+
 
 class CallParameter:
     def __init__(self, parameter_id: int, value: NovaValue):
         self.parameter_id = int(parameter_id)
         self.value = value
+
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.parameter_id)
         self.value._write_to(w)
+
 
 class FunctionCall:
     def __init__(self, script_id: int, parameters):
         self.script_id = int(script_id)
         self.parameters = list(parameters)
+
     def _write_to(self, w: BinaryWriter):
         w.write_i32(self.script_id)
         w.write_vec(self.parameters, lambda p: p._write_to(w))
 
+
 def _unwrap(acts):
-    if acts is None: return []
+    if acts is None:
+        return []
     return acts.actions if hasattr(acts, "actions") else list(acts)
+
 
 class _ActionBuilder:
     def __init__(self):
@@ -87,6 +100,10 @@ class _ActionBuilder:
         vals = (as_object_set(target), as_float_nova(rot), as_nova(bool(shortest_path)), as_nova(bool(is_global)), as_float_nova(duration), NovaValue.easing(easing))
         return self._push(ActionID.Rotate, lambda w: [v._write_to(w) for v in vals], wait=wait)
 
+    def rotate_around(self, target, pivot, rotation, *, rotate_target=True, duration=0.0, easing=0, wait=False):
+        vals = (as_object_set(target), as_nova(pivot), as_float_nova(rotation), as_nova(bool(rotate_target)), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.RotateAround, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
     def set_var(self, var, value):
         vid = var.variable_id if isinstance(var, Variable) else int(var)
         val = as_nova(value) if value is not None else None
@@ -96,10 +113,41 @@ class _ActionBuilder:
         vid = var.variable_id if isinstance(var, Variable) else int(var)
         return self._push(ActionID.ResetVariable, lambda w: w.write_i32(vid))
 
+    def reset_object(self, target):
+        t = as_object_set(target)
+        return self._push(ActionID.ResetObject, lambda w: t._write_to(w))
+
     def set_color(self, target, color, *, channel=0, duration=0.0, easing=0, wait=False):
         col = as_nova(color) if isinstance(color, (NovaValue, Variable, Parameter)) else NovaValue.color(color)
         vals = (as_object_set(target), col, NovaValue.int(channel), as_float_nova(duration), NovaValue.easing(easing))
         return self._push(ActionID.SetColor, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_transparency(self, target, transparency, *, channel=0, duration=0.0, easing=0, wait=False):
+        vals = (as_object_set(target), as_float_nova(transparency), NovaValue.int(channel), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.SetTransparency, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_secondary_color(self, target, color, *, duration=0.0, easing=0, wait=False):
+        col = as_nova(color) if isinstance(color, (NovaValue, Variable, Parameter)) else NovaValue.color(color)
+        vals = (as_object_set(target), col, as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.SetSecondaryColor, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_secondary_transparency(self, target, transparency, *, duration=0.0, easing=0, wait=False):
+        vals = (as_object_set(target), as_float_nova(transparency), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.SetSecondaryTransparency, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_border_color(self, target, color, *, duration=0.0, easing=0, wait=False):
+        col = as_nova(color) if isinstance(color, (NovaValue, Variable, Parameter)) else NovaValue.color(color)
+        vals = (as_object_set(target), col, as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.SetBorderColor, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_border_transparency(self, target, transparency, *, duration=0.0, easing=0, wait=False):
+        vals = (as_object_set(target), as_float_nova(transparency), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.SetBorderTransparency, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_sprite(self, target, sprite):
+        sp = as_nova(sprite) if isinstance(sprite, (NovaValue, Variable, Parameter)) else NovaValue.sprite(sprite)
+        t = as_object_set(target)
+        return self._push(ActionID.SetSprite, lambda w: (t._write_to(w), sp._write_to(w)))
 
     def set_text(self, target, text):
         t = as_object_set(target)
@@ -110,23 +158,6 @@ class _ActionBuilder:
         t, en = as_object_set(target), as_nova(enabled)
         return self._push(ActionID.SetEnabled, lambda w: (t._write_to(w), en._write_to(w)))
 
-    def camera_pan(self, pos, *, duration=0.0, easing=0, wait=False):
-        vals = (as_nova(pos), as_float_nova(duration), NovaValue.easing(easing))
-        return self._push(ActionID.CameraPan, lambda w: [v._write_to(w) for v in vals], wait=wait)
-
-    def camera_zoom(self, viewport_size, *, duration=0.0, easing=0, wait=False):
-        vals = (as_float_nova(viewport_size), as_float_nova(duration), NovaValue.easing(easing))
-        return self._push(ActionID.CameraZoom, lambda w: [v._write_to(w) for v in vals], wait=wait)
-
-    def camera_shake(self, strength=0.8, roughness=8.0, fade_in=0.02, fade_out=0.15, duration=0.2, wait=False):
-        vals = [as_float_nova(x) for x in (strength, roughness, fade_in, fade_out, duration)]
-        return self._push(ActionID.CameraShake, lambda w: [v._write_to(w) for v in vals], wait=wait)
-
-    def game_text(self, text, duration=2.0, wait=False):
-        txt = as_nova(text) if isinstance(text, (NovaValue, Variable, Parameter)) else NovaValue.string(text)
-        d = as_float_nova(duration)
-        return self._push(ActionID.GameTextShow, lambda w: (txt._write_to(w), d._write_to(w)), wait=wait)
-
     def activate(self, target):
         t = as_object_set(target)
         return self._push(ActionID.Activate, lambda w: t._write_to(w))
@@ -135,12 +166,131 @@ class _ActionBuilder:
         t = as_object_set(target)
         return self._push(ActionID.Deactivate, lambda w: t._write_to(w))
 
+    def damage(self, target, amount):
+        t, dmg = as_object_set(target), as_float_nova(amount)
+        return self._push(ActionID.Damage, lambda w: (t._write_to(w), dmg._write_to(w)))
+
     def kill(self, target):
         t = as_object_set(target)
         return self._push(ActionID.Kill, lambda w: t._write_to(w))
 
     def game_finish(self):
         return self._push(ActionID.GameFinish, lambda w: None)
+
+    def camera_pan(self, pos, *, duration=0.0, easing=0, wait=False):
+        vals = (as_nova(pos), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.CameraPan, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def camera_follow_player(self):
+        return self._push(ActionID.CameraFollowPlayer, lambda w: None)
+
+    def camera_zoom(self, viewport_size, *, duration=0.0, easing=0, wait=False):
+        vals = (as_float_nova(viewport_size), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.CameraZoom, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def camera_zoom_reset(self, *, duration=0.0, easing=0, wait=False):
+        vals = (as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.CameraZoomReset, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def camera_offset(self, offset, *, duration=0.0, easing=0, wait=False):
+        vals = (as_nova(offset), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.CameraOffset, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def camera_offset_reset(self, *, duration=0.0, easing=0, wait=False):
+        vals = (as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.CameraOffsetReset, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def camera_shake(self, strength=0.8, roughness=8.0, fade_in=0.02, fade_out=0.15, duration=0.2, wait=False):
+        vals = [as_float_nova(x) for x in (strength, roughness, fade_in, fade_out, duration)]
+        return self._push(ActionID.CameraShake, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def play_sound(self, sound, *, volume=1.0, pitch=1.0):
+        snd = as_nova(sound) if isinstance(sound, (NovaValue, Variable, Parameter)) else NovaValue.sound(sound)
+        vals = (snd, as_float_nova(volume), as_float_nova(pitch))
+        return self._push(ActionID.PlaySound, lambda w: [v._write_to(w) for v in vals])
+
+    def play_music(self, music, *, volume=1.0, pitch=1.0):
+        mus = as_nova(music) if isinstance(music, (NovaValue, Variable, Parameter)) else NovaValue.music(music)
+        vals = (mus, as_float_nova(volume), as_float_nova(pitch))
+        return self._push(ActionID.PlayMusic, lambda w: [v._write_to(w) for v in vals])
+
+    def set_direction(self, target, direction):
+        t, d = as_object_set(target), as_nova(direction)
+        return self._push(ActionID.SetDirection, lambda w: (t._write_to(w), d._write_to(w)))
+
+    def set_gravity(self, target, gravity):
+        t, g = as_object_set(target), as_nova(gravity)
+        return self._push(ActionID.SetGravity, lambda w: (t._write_to(w), g._write_to(w)))
+
+    def set_velocity(self, target, velocity):
+        t, v = as_object_set(target), as_nova(velocity)
+        return self._push(ActionID.SetVelocity, lambda w: (t._write_to(w), v._write_to(w)))
+
+    def set_cinematic(self, enabled):
+        en = as_nova(enabled)
+        return self._push(ActionID.SetCinematic, lambda w: en._write_to(w))
+
+    def set_input_enabled(self, enabled):
+        en = as_nova(enabled)
+        return self._push(ActionID.SetInputEnabled, lambda w: en._write_to(w))
+
+    def set_timer_enabled(self, enabled):
+        en = as_nova(enabled)
+        return self._push(ActionID.SetTimerEnabled, lambda w: en._write_to(w))
+
+    def game_text(self, text, duration=2.0, wait=False):
+        txt = as_nova(text) if isinstance(text, (NovaValue, Variable, Parameter)) else NovaValue.string(text)
+        d = as_float_nova(duration)
+        return self._push(ActionID.GameTextShow, lambda w: (txt._write_to(w), d._write_to(w)), wait=wait)
+
+    def dialogue_show(self, text, position=(0.0, 0.0), reverse_direction=False, *, wait=False):
+        txt = as_nova(text) if isinstance(text, (NovaValue, Variable, Parameter)) else NovaValue.string(text)
+        vals = (txt, as_nova(position), as_nova(bool(reverse_direction)))
+        return self._push(ActionID.DialogueShow, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def stop_script(self, script):
+        sc = as_nova(script) if isinstance(script, (NovaValue, Variable, Parameter)) else NovaValue.script(script)
+        return self._push(ActionID.StopScript, lambda w: sc._write_to(w))
+
+    def transition_in(self, transition_type=0, color="#000000", *, duration=0.5, easing=0, wait=False):
+        col = as_nova(color) if isinstance(color, (NovaValue, Variable, Parameter)) else NovaValue.color(color)
+        vals = (NovaValue.transition(transition_type), col, as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.TransitionIn, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def transition_out(self, transition_type=0, color="#000000", *, duration=0.5, easing=0, wait=False):
+        col = as_nova(color) if isinstance(color, (NovaValue, Variable, Parameter)) else NovaValue.color(color)
+        vals = (NovaValue.transition(transition_type), col, as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.TransitionOut, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def time_scale(self, scale, *, duration=0.0, easing=0, wait=False):
+        vals = (as_float_nova(scale), as_float_nova(duration), NovaValue.easing(easing))
+        return self._push(ActionID.TimeScale, lambda w: [v._write_to(w) for v in vals], wait=wait)
+
+    def set_var_over_time(self, var, value, *, duration=1.0, easing=0, wait=False):
+        vid = var.variable_id if isinstance(var, Variable) else int(var)
+        val = as_nova(value) if value is not None else None
+        dur, eas = as_float_nova(duration), NovaValue.easing(easing)
+        return self._push(
+            ActionID.SetVariableOverTime,
+            lambda w: (w.write_i32(vid), w.write_option(val, lambda v: v._write_to(w)), dur._write_to(w), eas._write_to(w)),
+            wait=wait,
+        )
+
+    def repeat_for_each(self, target, body, *, wait=True):
+        t, acts = as_object_set(target), _unwrap(body)
+        return self._push(ActionID.RepeatForEachObject, lambda w: (t._write_to(w), w.write_vec(acts, lambda a: a._write_to(w))), wait=wait)
+
+    def stop_sound(self, sound_instance, *, fade_out=0.0):
+        vals = (as_nova(sound_instance), as_float_nova(fade_out))
+        return self._push(ActionID.StopSound, lambda w: [v._write_to(w) for v in vals])
+
+    def play_particles(self, target):
+        t = as_object_set(target)
+        return self._push(ActionID.PlayParticleSystem, lambda w: t._write_to(w))
+
+    def stop_particles(self, target, *, clear=False):
+        vals = (as_object_set(target), as_nova(bool(clear)))
+        return self._push(ActionID.StopParticleSystem, lambda w: [v._write_to(w) for v in vals])
 
     def raw_action(self, action_id: int, *fields, wait=False):
         vals = [as_nova(f) for f in fields]
@@ -216,8 +366,11 @@ class Script(_ActionBuilder):
         return self
 
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.script_id); w.write_str(self.script_name); w.write_bool(self.is_function)
-        w.write_i32(self.activation_count); self.condition._write_to(w)
+        w.write_i32(self.script_id)
+        w.write_str(self.script_name)
+        w.write_bool(self.is_function)
+        w.write_i32(self.activation_count)
+        self.condition._write_to(w)
         w.write_vec(self.activation_list, lambda a: a._write_to(w))
         w.write_vec(self.parameters, lambda p: p._write_to(w))
         w.write_vec(self.variables, lambda v: v._write_to(w))
