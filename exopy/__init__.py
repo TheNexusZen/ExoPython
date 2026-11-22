@@ -220,12 +220,13 @@ class ExoLevel:
         self.gravity = (float(gravity[0]), float(gravity[1]))
         self.custom_bg_color = parse_color(self.settings.get("CustomBackgroundColor", (0.0, 0.0, 0.0, 1.0)))
         self.thumbnail = str(self.settings.get("Thumbnail", ""))
-        self.serialization_version = int(self.settings.get("SerializationVersion", 18))
+        self.serialization_version = int(self.settings.get("SerializationVersion", 23))
         self.level_version = int(self.settings.get("LevelVersion", 1))
         self.nova_level = bool(self.settings.get("NovaLevel", True))
         self.creation_ticks = self.settings.get("CreationTicks")
         self.update_ticks = self.settings.get("UpdateTicks")
-        self.v19_script_extra = int(self.settings.get("_V19ScriptExtra", 0))
+        self.unknown2 = bytes(self.settings.get("_Unknown2", b"\x00\x00\x00\x00"))[:4].ljust(4, b"\x00")
+        self.unknown3 = bytes(self.settings.get("_Unknown3", b"\x00\x00\x00\x00"))[:4].ljust(4, b"\x00")
 
         self.legacy_tiles = LegacyTileLayers()
         self.objects, self.layers = [], [Layer(1, "Layer 1")]
@@ -368,8 +369,10 @@ class ExoLevel:
         w.write_bool(self.settings["CenterCamera"])
         w.write_vec(self.legacy_scripts, w.write_i32)
         if ver >= 19:
-            w.write_i32(self.v19_script_extra)
+            w.write_raw(self.unknown2)
         w.write_vec(self.nova_scripts, lambda s: s._write_to(w, ver))
+        if ver >= 23:
+            w.write_raw(self.unknown3)
         w.write_vec(self.global_variables, lambda v: v._write_to(w, ver))
         w.write_str(self.theme)
         w.write_color(self.custom_bg_color)
@@ -386,6 +389,9 @@ class ExoLevel:
         w.write_bool(self.settings["DisableReplays"])
         w.write_bool(self.settings["DisableRevivePads"])
         w.write_bool(self.settings["DisableStartAnim"])
+        if ver >= 23:
+            w.write_bool(self.settings["EnableSensors"])
+            w.write_bool(self.settings["DisableScreenRotation"])
         w.write_vec2(self.gravity)
         self.author_replay.write(w)
         return w.to_bytes()
