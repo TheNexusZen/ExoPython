@@ -1,9 +1,13 @@
 import gzip, hashlib, os, secrets, struct, uuid
-from . import _state, scripts, variables, stdlib
+from . import _state, scripts, variables, stdlib, types_ext
 from .decompile import decompile
 from .binary import BinaryWriter, parse_color
 from .constants import THEMES, DEFAULT_SETTINGS, TILE_IDS, OBJECT_PROPERTIES
-
+from .types_ext import (
+    AuthorReplay, Brush, BrushGrid, BrushObject,
+    LegacyTileLayers, OldAction, OldActionProperty, OldScript,
+    Pattern, Prefab, RawObject, TerrainCopyStyle,
+)
 
 KEYS_FILE = os.path.expanduser("~/.exopy_keys.txt")
 
@@ -46,9 +50,14 @@ class Layer:
         self.children = []
 
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.layer_id); w.write_str(self.layer_name)
-        w.write_bool(self.selected); w.write_bool(self.invisible); w.write_bool(self.locked)
-        w.write_i32(self.foreground_type); w.write_vec2(self.parallax); w.write_bool(self.fixed_size)
+        w.write_i32(self.layer_id)
+        w.write_str(self.layer_name)
+        w.write_bool(self.selected)
+        w.write_bool(self.invisible)
+        w.write_bool(self.locked)
+        w.write_i32(self.foreground_type)
+        w.write_vec2(self.parallax)
+        w.write_bool(self.fixed_size)
         w.write_vec(self.children, w.write_i32)
 
 
@@ -61,20 +70,36 @@ class GameObject:
         else:
             raise ValueError(f"Unknown object '{obj_type}'. Valid: {list(TILE_IDS.keys())} or int tile_id")
         self.entity_id = level._next_entity_id()
+        self.prefab_entity_id = 0
+        self.prefab_id = 0
         self.pos = (float(pos[0]), float(pos[1]))
         self.scale = (1.0, 1.0)
         self.rotation = 0.0
         self.tag = ""
         self.layer = level.layers[0].layer_id
+        self.in_group = 0
+        self.group_members = []
         self.properties = {}
         self._level = level
 
     def settings(self, cfg: dict):
         for k, v in cfg.items():
-            if k == "Rotation": self.rotation = float(v)
-            elif k == "Scale": self.scale = (float(v[0]), float(v[1]))
-            elif k == "Tag": self.tag = str(v)
-            elif k == "Layer": self.layer = v.layer_id if isinstance(v, Layer) else int(v)
+            if k == "Rotation":
+                self.rotation = float(v)
+            elif k == "Scale":
+                self.scale = (float(v[0]), float(v[1]))
+            elif k == "Tag":
+                self.tag = str(v)
+            elif k == "Layer":
+                self.layer = v.layer_id if isinstance(v, Layer) else int(v)
+            elif k == "PrefabEntityId":
+                self.prefab_entity_id = int(v)
+            elif k == "PrefabId":
+                self.prefab_id = int(v)
+            elif k == "InGroup":
+                self.in_group = int(v)
+            elif k == "GroupMembers":
+                self.group_members = [int(x) for x in v]
             elif k == "Box":
                 hw, hh = float(v[0]) / 2.0, float(v[1]) / 2.0
                 self.properties["TerrainCorners"] = [[(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]]
@@ -94,22 +119,37 @@ class GameObject:
         return self
 
     def _write_to(self, w: BinaryWriter):
-        w.write_i32(self.entity_id); w.write_i32(self.tile_id)
-        w.write_i32(0); w.write_i32(0)
-        w.write_vec2(self.pos); w.write_vec2(self.scale); w.write_f32(self.rotation); w.write_str(self.tag)
+        w.write_i32(self.entity_id)
+        w.write_i32(self.tile_id)
+        w.write_i32(self.prefab_entity_id)
+        w.write_i32(self.prefab_id)
+        w.write_vec2(self.pos)
+        w.write_vec2(self.scale)
+        w.write_f32(self.rotation)
+        w.write_str(self.tag)
         w.write_i32(len(self.properties))
         for name, val in self.properties.items():
             pid, pt = OBJECT_PROPERTIES[name]
             w.write_i32(pid)
-            if pt == "color": w.write_color(val)
-            elif pt == "i32": w.write_i32(val)
-            elif pt == "f32": w.write_f32(val)
-            elif pt == "bool": w.write_bool(val)
-            elif pt == "vec2": w.write_vec2(val)
-            elif pt == "str": w.write_str(val)
-            elif pt == "vi32": w.write_vec(val, w.write_i32)
-            elif pt == "tcorners": w.write_vec(val, lambda poly: w.write_vec(poly, w.write_vec2))
-        w.write_i32(self.layer); w.write_i32(0); w.write_vec([], w.write_i32)
+            if pt == "color":
+                w.write_color(val)
+            elif pt == "i32":
+                w.write_i32(val)
+            elif pt == "f32":
+                w.write_f32(val)
+            elif pt == "bool":
+                w.write_bool(val)
+            elif pt == "vec2":
+                w.write_vec2(val)
+            elif pt == "str":
+                w.write_str(val)
+            elif pt == "vi32":
+                w.write_vec(val, w.write_i32)
+            elif pt == "tcorners":
+                w.write_vec(val, lambda poly: w.write_vec(poly, w.write_vec2))
+        w.write_i32(self.layer)
+        w.write_i32(self.in_group)
+        w.write_vec(self.group_members, w.write_i32)
 
 
 class ExoLevel:
@@ -129,23 +169,59 @@ class ExoLevel:
         self.name, self.theme, self.laps = str(name), THEMES[tk], int(laps)
         self.gravity = (float(gravity[0]), float(gravity[1]))
         self.custom_bg_color = parse_color(self.settings.get("CustomBackgroundColor", (0.0, 0.0, 0.0, 1.0)))
+        self.thumbnail = str(self.settings.get("Thumbnail", ""))
+        self.serialization_version = int(self.settings.get("SerializationVersion", 18))
+        self.level_version = int(self.settings.get("LevelVersion", 1))
+        self.nova_level = bool(self.settings.get("NovaLevel", True))
 
-        self.objects, self.layers, self.nova_scripts, self.global_variables = [], [Layer(1, "Layer 1")], [], []
+        self.legacy_tiles = LegacyTileLayers()
+        self.objects, self.layers = [], [Layer(1, "Layer 1")]
+        self.prefabs: list[Prefab] = []
+        self.brushes: list[Brush] = []
+        self.patterns: list[Pattern] = []
+        self.color_palette = list(self.settings.get("ColorPalette", []))
+        self.legacy_scripts: list[int] = []
+        self.nova_scripts, self.global_variables = [], []
+        self.terrain_style = TerrainCopyStyle()
+        self.author_replay = AuthorReplay()
+
         self._eid = self._vid = self._sid = self._pid = 1
         self._lid = 2
         self._return_regs = {}
         self._stdlib_cache = {}
 
-    def _next_entity_id(self): v = self._eid; self._eid += 1; return v
-    def _next_layer_id(self): v = self._lid; self._lid += 1; return v
-    def _next_var_id(self): v = self._vid; self._vid += 1; return v
-    def _next_script_id(self): v = self._sid; self._sid += 1; return v
-    def _next_param_id(self): v = self._pid; self._pid += 1; return v
-    def _get_layer(self, lid): return next((l for l in self.layers if l.layer_id == lid), None)
+    def _next_entity_id(self):
+        v = self._eid
+        self._eid += 1
+        return v
+
+    def _next_layer_id(self):
+        v = self._lid
+        self._lid += 1
+        return v
+
+    def _next_var_id(self):
+        v = self._vid
+        self._vid += 1
+        return v
+
+    def _next_script_id(self):
+        v = self._sid
+        self._sid += 1
+        return v
+
+    def _next_param_id(self):
+        v = self._pid
+        self._pid += 1
+        return v
+
+    def _get_layer(self, lid):
+        return next((l for l in self.layers if l.layer_id == lid), None)
 
     def _obfuscate_names(self):
         def _mangle(seed):
             return "_0x" + hashlib.md5(f"{self.uuid}:{seed}".encode()).hexdigest()[:6]
+
         for idx, v in enumerate(self.global_variables):
             v.name = _mangle(f"gv_{idx}_{v.variable_id}")
         for idx, s in enumerate(self.nova_scripts):
@@ -158,36 +234,64 @@ class ExoLevel:
     def to_bytes(self) -> bytes:
         w = BinaryWriter()
         w.write_raw(b"NYA^")
-        w.write_i32(18); w.write_str(self.uuid); w.write_i32(1); w.write_str(self.name); w.write_str("")
-        w.write_datetime_now(); w.write_datetime_now()
-        w.write_i64(int(round(float(self.settings.get("AuthorTime", 0.0)) * 1000))); w.write_vec([], w.write_i64); w.write_i64(int(round(float(self.settings.get("Silver", 0.0)) * 1000))); w.write_i64(int(round(float(self.settings.get("Gold", 0.0)) * 1000)))
-        w.write_i32(self.laps); w.write_bool(self.settings["Private"]); w.write_bool(True)
-        w.write_str(self.uuid); w.write_i32(1); w.write_bool(True)
-        for _ in range(6): w.write_vec([], w.write_i32)
+        w.write_i32(self.serialization_version)
+        w.write_str(self.uuid)
+        w.write_i32(self.level_version)
+        w.write_str(self.name)
+        w.write_str(self.thumbnail)
+        w.write_datetime_now()
+        w.write_datetime_now()
+        author_ms = int(round(float(self.settings.get("AuthorTime", 0.0)) * 1000))
+        author_laps = [int(round(float(x) * 1000)) for x in self.settings.get("AuthorLapTimes", [])]
+        silver_ms = int(round(float(self.settings.get("Silver", 0.0)) * 1000))
+        gold_ms = int(round(float(self.settings.get("Gold", 0.0)) * 1000))
+
+        w.write_i64(author_ms)
+        w.write_vec(author_laps, w.write_i64)
+        w.write_i64(silver_ms)
+        w.write_i64(gold_ms)
+        w.write_i32(self.laps)
+        w.write_bool(self.settings["Private"])
+        w.write_bool(self.nova_level)
+
+        w.write_str(self.uuid)
+        w.write_i32(self.level_version)
+        w.write_bool(self.nova_level)
+        self.legacy_tiles.write(w)
         w.write_vec(self.objects, lambda o: o._write_to(w))
         w.write_vec(self.layers, lambda l: l._write_to(w))
-        for _ in range(4): w.write_i32(0)
-        w.write_i64(int(round(float(self.settings.get("AuthorTime", 0.0)) * 1000))); w.write_vec([], w.write_i64); w.write_i64(int(round(float(self.settings.get("Silver", 0.0)) * 1000))); w.write_i64(int(round(float(self.settings.get("Gold", 0.0)) * 1000)))
-        w.write_i32(self.laps); w.write_bool(self.settings["CenterCamera"])
-        w.write_vec([], w.write_i32)
+        w.write_vec(self.prefabs, lambda p: p.write(w))
+        w.write_vec(self.brushes, lambda b: b.write(w))
+        w.write_vec(self.patterns, lambda pt: pt.write(w))
+        if self.serialization_version >= 17:
+            w.write_vec(self.color_palette, w.write_color)
+
+        w.write_i64(author_ms)
+        w.write_vec(author_laps, w.write_i64)
+        w.write_i64(silver_ms)
+        w.write_i64(gold_ms)
+        w.write_i32(self.laps)
+        w.write_bool(self.settings["CenterCamera"])
+        w.write_vec(self.legacy_scripts, w.write_i32)
         w.write_vec(self.nova_scripts, lambda s: s._write_to(w))
         w.write_vec(self.global_variables, lambda v: v._write_to(w))
-        w.write_str(self.theme); w.write_color(self.custom_bg_color); w.write_raw(b"\x00\x00\x00\x00")
-        w.write_i32(0); w.write_vec2((0.0, 0.0)); w.write_vec2((0.0, 0.0))
-        w.write_color((0.0, 0.0, 0.0, 0.0)); w.write_color((0.0, 0.0, 0.0, 0.0)); w.write_i32(0)
-        w.write_color((0.0, 0.0, 0.0, 0.0)); w.write_f32(0.0); w.write_f32(0.0)
-        w.write_bool(False); w.write_bool(False); w.write_f32(0.0)
+        w.write_str(self.theme)
+        w.write_color(self.custom_bg_color)
+        self.terrain_style.write(w)
+
         music = self.settings["music"]
         if not music:
-            w.write_bool(True); w.write_vec([], w.write_str)
+            w.write_bool(True)
+            w.write_vec([], w.write_str)
         else:
-            w.write_bool(False); w.write_vec([music] if isinstance(music, str) else list(music), w.write_str)
+            w.write_bool(False)
+            w.write_vec([music] if isinstance(music, str) else list(music), w.write_str)
         w.write_bool(self.settings["AllowDirectionChange"])
         w.write_bool(self.settings["DisableReplays"])
         w.write_bool(self.settings["DisableRevivePads"])
         w.write_bool(self.settings["DisableStartAnim"])
         w.write_vec2(self.gravity)
-        w.write_i32(0)
+        self.author_replay.write(w)
         return w.to_bytes()
 
     def export(
@@ -228,9 +332,7 @@ class ExoLevel:
         if meta_obj is not None:
             self.objects.remove(meta_obj)
 
-        fns = sum(1 for s in self.nova_scripts if s.is_function)
         gen = _state.generator_mode if generator_mode is None else bool(generator_mode)
-        fname = os.path.basename(filepath)
         result = {
             "ok": True,
             "path": filepath,
@@ -239,6 +341,9 @@ class ExoLevel:
                 "objects": len(self.objects),
                 "scripts": len(self.nova_scripts),
                 "variables": len(self.global_variables),
+                "prefabs": len(self.prefabs),
+                "brushes": len(self.brushes),
+                "patterns": len(self.patterns),
             },
         }
         if include_meta:
@@ -246,7 +351,6 @@ class ExoLevel:
             result["watermark"] = wm
         if gen:
             return result
-        pass
         return filepath
 
 
