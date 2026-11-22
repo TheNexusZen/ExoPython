@@ -42,7 +42,7 @@ _STATIC_TO_PARAM_DYNAMIC = {
 class NovaValue:
     def __init__(self, dynamic_type: int, *, bool_value=False, int_value=0, float_value=0.0,
                  string_value=None, color_value=(0.0, 0.0, 0.0, 0.0), vector_value=(0.0, 0.0),
-                 int_list_value=None, sub_values=None):
+                 int_list_value=None, sub_values=None, unknown5: bytes = b"\x00", unknown6: bytes = b"\x00\x00\x00\x00"):
         self.dynamic_type = int(dynamic_type)
         self.bool_value = bool(bool_value)
         self.int_value = int(int_value)
@@ -52,6 +52,8 @@ class NovaValue:
         self.vector_value = (float(vector_value[0]), float(vector_value[1]))
         self.int_list_value = list(int_list_value) if int_list_value is not None else None
         self.sub_values = list(sub_values) if sub_values is not None else None
+        self.unknown5 = bytes(unknown5)[:1].ljust(1, b"\x00")
+        self.unknown6 = bytes(unknown6)[:4].ljust(4, b"\x00")
 
     @classmethod
     def bool(cls, v): return cls(DynamicType.BoolConstant, bool_value=bool(v))
@@ -75,6 +77,8 @@ class NovaValue:
     def music(cls, v=""): return cls(DynamicType.MusicConstant, string_value=str(v))
     @classmethod
     def sprite(cls, v=""): return cls(DynamicType.SpriteConstant, string_value=str(v))
+    @classmethod
+    def prefab(cls, pf): return cls(DynamicType.PrefabConstant, int_value=pf.prefab_id if hasattr(pf, "prefab_id") else int(pf))
     @classmethod
     def script(cls, s): return cls(DynamicType.ScriptConstant, int_value=s.script_id if hasattr(s, "script_id") else int(s))
     @classmethod
@@ -154,7 +158,7 @@ class NovaValue:
             "sub_values": [v.to_dict() for v in self.sub_values] if self.sub_values is not None else None,
         }
 
-    def _write_to(self, w: BinaryWriter, ver: int = 18):
+    def _write_to(self, w: BinaryWriter, ver: int = 23):
         w.write_i32(self.dynamic_type)
         w.write_bool(self.bool_value)
         w.write_i32(self.int_value)
@@ -163,11 +167,11 @@ class NovaValue:
         w.write_color(self.color_value)
         w.write_vec2(self.vector_value)
         if ver >= 19:
-            w.write_u8(0)
+            w.write_raw(self.unknown5)
         w.write_option(self.int_list_value, lambda lst: w.write_vec(lst, w.write_i32))
-        w.write_option(self.sub_values, lambda lst: w.write_vec(lst, lambda v: v._write_to(w, ver)))
         if ver >= 19:
-            w.write_raw(b"\x00\x00\x00\x00")
+            w.write_raw(self.unknown6)
+        w.write_option(self.sub_values, lambda lst: w.write_vec(lst, lambda v: v._write_to(w, ver)))
 
 
 class _ExprMixin:
@@ -185,12 +189,13 @@ class _ExprMixin:
 
 
 class Variable(_ExprMixin):
-    def __init__(self, vid, name, stype, init_val):
+    def __init__(self, vid, name, stype, init_val, *, unknown4: bytes = b"\x00\x00\x00\x00"):
         self.variable_id, self.name, self.static_type = int(vid), str(name), int(stype)
+        self.unknown4 = bytes(unknown4)[:4].ljust(4, b"\x00")
         self.initial_value = as_typed_nova(init_val, self.static_type)
 
     def ref(self):
-        return NovaValue(_STATIC_TO_VAR_DYNAMIC[self.static_type], int_value=self.variable_id)
+        return NovaValue(_STATIC_TO_VAR_DYNAMIC.get(self.static_type, DynamicType.IntVariable), int_value=self.variable_id)
 
     def to_dict(self) -> dict:
         return {
@@ -200,10 +205,12 @@ class Variable(_ExprMixin):
             "initial_value": self.initial_value.to_dict(),
         }
 
-    def _write_to(self, w: BinaryWriter, ver: int = 18):
+    def _write_to(self, w: BinaryWriter, ver: int = 23):
         w.write_i32(self.variable_id)
         w.write_str(self.name)
         w.write_i32(self.static_type)
+        if ver >= 23:
+            w.write_raw(self.unknown4)
         self.initial_value._write_to(w, ver)
 
 
@@ -213,7 +220,7 @@ class Parameter(_ExprMixin):
         self.default_value = as_typed_nova(default_val, self.static_type)
 
     def ref(self):
-        return NovaValue(_STATIC_TO_PARAM_DYNAMIC[self.static_type], int_value=self.parameter_id)
+        return NovaValue(_STATIC_TO_PARAM_DYNAMIC.get(self.static_type, DynamicType.IntParameter), int_value=self.parameter_id)
 
     def to_dict(self) -> dict:
         return {
@@ -223,7 +230,7 @@ class Parameter(_ExprMixin):
             "default_value": self.default_value.to_dict(),
         }
 
-    def _write_to(self, w: BinaryWriter, ver: int = 18):
+    def _write_to(self, w: BinaryWriter, ver: int = 23):
         w.write_i32(self.parameter_id)
         w.write_str(self.name)
         w.write_i32(self.static_type)
@@ -239,6 +246,7 @@ def as_nova(val):
     if isinstance(val, str):
         return NovaValue.color(val) if (val.startswith("#") and len(val) in (7, 9)) else NovaValue.string(val)
     if hasattr(val, "entity_id"): return NovaValue.object(val)
+    if hasattr(val, "prefab_id"): return NovaValue.prefab(val)
     if hasattr(val, "layer_id"): return NovaValue.layer(val)
     if hasattr(val, "script_id"): return NovaValue.script(val)
     if isinstance(val, (tuple, list)):
@@ -281,7 +289,7 @@ def default_nova_for(stype: int) -> NovaValue:
         StaticType.Sprite: NovaValue.sprite(""),
         StaticType.Script: NovaValue.script(0),
         StaticType.Layer: NovaValue.layer(1),
-    }[int(stype)]
+    }.get(int(stype), NovaValue.int(0))
 
 
 def as_typed_nova(val, stype: int) -> NovaValue:
@@ -543,6 +551,7 @@ def easing(v=0): return NovaValue.easing(v)
 def sound(v=""): return NovaValue.sound(v)
 def music(v=""): return NovaValue.music(v)
 def sprite(v=""): return NovaValue.sprite(v)
+def prefab(pf): return NovaValue.prefab(pf)
 
 
 # --- Boolean Logic & Comparisons ---
