@@ -2,6 +2,7 @@ import gzip, hashlib, json, os, secrets, struct, uuid
 from dataclasses import asdict
 from . import _state, scripts, variables, stdlib, types_ext, errors
 from .decompile import decompile, inspect_level
+from .merge import extract_prefab, merge_level
 from .binary import BinaryWriter, now_cs_ticks, parse_color, rgba_to_hex
 from .constants import THEMES, DEFAULT_SETTINGS, TILE_IDS, OBJECT_PROPERTIES
 from .errors import (
