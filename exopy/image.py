@@ -136,7 +136,7 @@ class ExoImage:
             self.pattern_id = lvl._next_pattern_id()
             lvl.patterns.append(Pattern(pattern_id=self.pattern_id, pattern_frames=[self.png_bytes]))
         else:
-            self._build_pixels()
+            self._build_pixels(lvl)
 
     def to_base64(self, data_url: bool = False) -> str:
         b64 = base64.b64encode(self.png_bytes).decode("ascii")
@@ -146,8 +146,8 @@ class ExoImage:
         i = (y * self.width + x) * 4
         return self.rgba[i], self.rgba[i + 1], self.rgba[i + 2], self.rgba[i + 3]
 
-    def _build_pixels(self):
-        from . import CreateObj
+    def _build_pixels(self, lvl):
+        from . import GameObject
 
         ox, oy = self.pos
         step = 0.5
@@ -165,7 +165,7 @@ class ExoImage:
                 col = f"#{r:02X}{g:02X}{b:02X}" if a == 255 else f"#{r:02X}{g:02X}{b:02X}{a:02X}"
                 cx = ox + (x + run / 2.0) * step
                 cy = oy - (y + 0.5) * step
-                obj = CreateObj("rect", (cx, cy)).settings({
+                obj = GameObject("rect", (cx, cy), lvl).settings({
                     "Width": run * step,
                     "Height": step,
                     "Color": col,
