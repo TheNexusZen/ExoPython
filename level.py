@@ -302,8 +302,8 @@ def check_ray_clear():
     return (
         exoscript.block()
         .set_var(path_clear, True)
-        .set_var(step_f, exovar.sign_int(df))
-        .set_var(step_r, exovar.sign_int(dr))
+        .set_var(step_f, exovar.sign(df))
+        .set_var(step_r, exovar.sign(dr))
         .set_var(ray_f, sel_f + step_f)
         .set_var(ray_r, sel_r + step_r)
         .repeat_while(
@@ -330,9 +330,9 @@ def validate_move():
         .set_var(is_legal, False)
         .set_var(df, cur_f - sel_f)
         .set_var(dr, cur_r - sel_r)
-        .set_var(abs_df, exovar.abs_int(df))
-        .set_var(abs_dr, exovar.abs_int(dr))
-        .set_var(abs_piece, exovar.abs_int(sel_code))
+        .set_var(abs_df, exovar.abs_(df))
+        .set_var(abs_dr, exovar.abs_(dr))
+        .set_var(abs_piece, exovar.abs_(sel_code))
         # Read destination square occupancy
         .set_var(query_idx, cur_idx)
         .call(read_board, wait=True)
@@ -448,10 +448,10 @@ main_sc = exoscript.create("ChessEngine", activation_count=1)
 main_sc.on(0)
 
 pw = exovar.pointer_world_pos()
-raw_f = exovar.floor_int(exovar.vec_x(pw) + 4.0)
-raw_r = exovar.floor_int(exovar.vec_y(pw) + 4.0)
-clamped_f = exovar.max_int(0, exovar.min_int(7, raw_f))
-clamped_r = exovar.max_int(0, exovar.min_int(7, raw_r))
+raw_f = exovar.floor(exovar.vec_x(pw) + 4.0, to_int=True)
+raw_r = exovar.floor(exovar.vec_y(pw) + 4.0, to_int=True)
+clamped_f = exovar.max_(0, exovar.min_(7, raw_f))
+clamped_r = exovar.max_(0, exovar.min_(7, raw_r))
 
 main_sc.call(refresh_hud, wait=True)
 
@@ -464,8 +464,13 @@ frame_loop = (
     .set_var(
         cur_pos,
         exovar.vec_values(
-            exovar.to_float(cur_f) - 3.5,
-            exovar.to_float(cur_r) - 3.5,
+            exovar.to_str(cur_f),
+            exovar.to_str(cur_r),
+        )
+        if False
+        else exovar.vec_values(
+            cur_f - 3.5,
+            cur_r - 3.5,
         ),
     )
     .move(hover_ring, cur_pos, is_global=True, duration=0.0)
@@ -545,7 +550,7 @@ frame_loop = (
                     # Check Pawn Promotion on back rank (White r=7 -> +5, Black r=0 -> -5)
                     .if_else(
                         exovar.and_(
-                            exovar.abs_int(sel_code).eq(1),
+                            exovar.abs_(sel_code).eq(1),
                             exovar.or_(
                                 exovar.and_(turn_side.eq(1), cur_r.eq(7)),
                                 exovar.and_(turn_side.eq(-1), cur_r.eq(0)),
@@ -568,7 +573,7 @@ frame_loop = (
                     .move(moving_glyph, cur_pos, is_global=True, duration=0.12, wait=True)
                     # Check if enemy King (abs(target_code) == 6) was captured
                     .if_else(
-                        exovar.abs_int(target_code).eq(6),
+                        exovar.abs_(target_code).eq(6),
                         exoscript.block()
                         .set_var(game_over, True)
                         .if_else(
