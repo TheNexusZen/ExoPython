@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exopython"
-version = "1.1.5"
+version = "1.1.6"
 description = "level builder, decompiler, image converter, and obfuscator for Exoracer (.exolvl) in python"
 readme = "README.md"
 license = {file = "LICENSE"}
