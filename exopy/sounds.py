@@ -1,4 +1,3 @@
-import audioop
 import math
 import os
 import shutil
@@ -10,6 +9,11 @@ from typing import List, Optional, Tuple, Union
 from . import scripts as exoscript
 from . import variables as exovar
 
+try:
+    import audioop
+except ImportError:  # Python 3.13+
+    audioop = None
+
 _NOTE_OFFSETS = {
     "C": 0, "C#": 1, "DB": 1,
     "D": 2, "D#": 3, "EB": 3,
@@ -19,6 +23,94 @@ _NOTE_OFFSETS = {
     "A": 9, "A#": 10, "BB": 10,
     "B": 11,
 }
+
+
+def _to_mono_pcm(raw: bytes, sampwidth: int) -> bytes:
+    if audioop is not None:
+        return audioop.tomono(raw, sampwidth, 0.5, 0.5)
+    if sampwidth == 1:
+        out = bytearray()
+        for i in range(0, len(raw) - 1, 2):
+            out.append(((raw[i] - 128) + (raw[i + 1] - 128)) // 2 + 128)
+        return bytes(out)
+    if sampwidth == 2:
+        cnt = len(raw) // 2
+        vals = struct.unpack(f"<{cnt}h", raw[: cnt * 2])
+        mono = [int((vals[i] + vals[i + 1]) / 2) for i in range(0, cnt - 1, 2)]
+        return struct.pack(f"<{len(mono)}h", *mono)
+    if sampwidth == 4:
+        cnt = len(raw) // 4
+        vals = struct.unpack(f"<{cnt}i", raw[: cnt * 4])
+        mono = [int((vals[i] + vals[i + 1]) / 2) for i in range(0, cnt - 1, 2)]
+        return struct.pack(f"<{len(mono)}i", *mono)
+    raise ValueError(f"Unsupported sample width: {sampwidth}")
+
+
+def _resample_mono_pcm(raw: bytes, sampwidth: int, in_rate: int, out_rate: int) -> bytes:
+    if audioop is not None:
+        converted, _ = audioop.ratecv(raw, sampwidth, 1, in_rate, out_rate, None)
+        return converted
+    if in_rate == out_rate or not raw:
+        return raw
+    if sampwidth == 1:
+        samples = [float(b - 128) for b in raw]
+    elif sampwidth == 2:
+        cnt = len(raw) // 2
+        samples = [float(x) for x in struct.unpack(f"<{cnt}h", raw[: cnt * 2])]
+    elif sampwidth == 4:
+        cnt = len(raw) // 4
+        samples = [float(x) for x in struct.unpack(f"<{cnt}i", raw[: cnt * 4])]
+    else:
+        raise ValueError(f"Unsupported sample width: {sampwidth}")
+
+    if len(samples) == 1:
+        out_samples = [int(samples[0])]
+    else:
+        out_len = max(1, int(round(len(samples) * out_rate / in_rate)))
+        scale = (len(samples) - 1) / max(1, out_len - 1)
+        out_samples = []
+        for i in range(out_len):
+            pos = i * scale
+            idx = int(pos)
+            frac = pos - idx
+            nxt = min(len(samples) - 1, idx + 1)
+            val = samples[idx] * (1.0 - frac) + samples[nxt] * frac
+            out_samples.append(int(round(val)))
+
+    if sampwidth == 1:
+        return bytes(max(0, min(255, s + 128)) for s in out_samples)
+    if sampwidth == 2:
+        clamped = [max(-32768, min(32767, s)) for s in out_samples]
+        return struct.pack(f"<{len(clamped)}h", *clamped)
+    clamped = [max(-2147483648, min(2147483647, s)) for s in out_samples]
+    return struct.pack(f"<{len(clamped)}i", *clamped)
+
+
+def _lin2lin_pcm(raw: bytes, src_width: int, dst_width: int) -> bytes:
+    if audioop is not None:
+        return audioop.lin2lin(raw, src_width, dst_width)
+    if src_width == dst_width:
+        return raw
+    if src_width == 1:
+        norm = [(b - 128) / 128.0 for b in raw]
+    elif src_width == 2:
+        cnt = len(raw) // 2
+        norm = [x / 32768.0 for x in struct.unpack(f"<{cnt}h", raw[: cnt * 2])]
+    elif src_width == 4:
+        cnt = len(raw) // 4
+        norm = [x / 2147483648.0 for x in struct.unpack(f"<{cnt}i", raw[: cnt * 4])]
+    else:
+        raise ValueError(f"Unsupported source width: {src_width}")
+
+    if dst_width == 1:
+        return bytes(max(0, min(255, int(round(s * 128.0)) + 128)) for s in norm)
+    if dst_width == 2:
+        clamped = [max(-32768, min(32767, int(round(s * 32768.0)))) for s in norm]
+        return struct.pack(f"<{len(clamped)}h", *clamped)
+    if dst_width == 4:
+        clamped = [max(-2147483648, min(2147483647, int(round(s * 2147483648.0)))) for s in norm]
+        return struct.pack(f"<{len(clamped)}i", *clamped)
+    raise ValueError(f"Unsupported destination width: {dst_width}")
 
 
 def note_to_midi(note: Union[str, int]) -> int:
@@ -113,9 +205,9 @@ def _read_pcm_mono(filepath: str, target_rate: int = 16000) -> Tuple[int, List[f
             os.remove(tmp_wav)
 
     if channels > 1:
-        raw = audioop.tomono(raw, sampwidth, 0.5, 0.5)
+        raw = _to_mono_pcm(raw, sampwidth)
     if framerate != target_rate:
-        raw, _ = audioop.ratecv(raw, sampwidth, 1, framerate, target_rate, None)
+        raw = _resample_mono_pcm(raw, sampwidth, framerate, target_rate)
         framerate = target_rate
 
     if sampwidth == 1:
@@ -130,7 +222,7 @@ def _read_pcm_mono(filepath: str, target_rate: int = 16000) -> Tuple[int, List[f
         ints = struct.unpack(f"<{count}i", raw)
         scale = 2147483648.0
     else:
-        raw16 = audioop.lin2lin(raw, sampwidth, 2)
+        raw16 = _lin2lin_pcm(raw, sampwidth, 2)
         count = len(raw16) // 2
         ints = struct.unpack(f"<{count}h", raw16)
         scale = 32768.0
@@ -177,7 +269,6 @@ def _extract_peaks(
         if not any(abs(existing_s - semi) < 0.6 for existing_s, _ in voices):
             voices.append((semi, vol))
 
-        # Suppress neighborhood + integer overtones so secondary voices pick distinct notes
         for harm in (1, 2, 3, 4):
             center = int(round(best_bin * harm))
             radius = max(2, int(round(best_bin * 0.06 * harm)))
@@ -199,10 +290,6 @@ def analyze_audio(
     quantize_semitones: bool = True,
     max_duration: Optional[float] = None,
 ) -> List[Tuple[float, List[Tuple[float, float]]]]:
-    """
-    Analyze an audio file into `(wait_sec, [(semitones, volume), ...])` frames.
-    When `polyphony > 1`, multiple simultaneous pitch voices are extracted per frame.
-    """
     rate, samples = _read_pcm_mono(filepath, target_rate=16000)
     if max_duration is not None:
         samples = samples[: int(float(max_duration) * rate)]
