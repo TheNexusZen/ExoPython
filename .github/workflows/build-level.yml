@@ -19,28 +19,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install exopython
-        run: pip install exopython
+        run: pip install .
 
-      - name: Patch missing now_cs_ticks in exopython.binary
-        run: |
-          python - <<'EOF'
-          import pathlib, exopython.binary as b
-
-          path = pathlib.Path(b.__file__)
-          src = path.read_text(encoding="utf-8")
-          if "def now_cs_ticks" not in src:
-              patch = """
-
-          def now_cs_ticks() -> int:
-              import datetime
-              epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
-              now = datetime.datetime.now(datetime.timezone.utc)
-              delta_us = int((now - epoch).total_seconds() * 1_000_000)
-              return 621355968000000000 + delta_us * 10
-          """
-              path.write_text(src + patch, encoding="utf-8")
-          EOF
-          python -c "import exopython as exo; print('exopython imported OK')"
+      - name: Verify exopython import
+        run: python -c "import exopython as exo; from exopython.binary import now_cs_ticks; print('exopython imported OK', now_cs_ticks())"
 
       - name: Run level.py
         run: python level.py
