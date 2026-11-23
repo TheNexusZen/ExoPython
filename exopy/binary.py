@@ -1,7 +1,14 @@
-import struct, time
+import struct
+import time
 
 _CS_EPOCH_TICKS = 621355968000000000
 _CS_KIND_UTC = 1 << 62
+
+
+def now_cs_ticks() -> int:
+    """Return current UTC timestamp formatted as C# DateTime.ToBinary() ticks."""
+    ticks = int(time.time() * 10_000_000) + _CS_EPOCH_TICKS
+    return ticks | _CS_KIND_UTC
 
 
 def parse_color(rgba):
@@ -69,8 +76,7 @@ class BinaryWriter:
             self.write_f32(c)
 
     def write_datetime_now(self):
-        ticks = int(time.time() * 10_000_000) + _CS_EPOCH_TICKS
-        self.write_i64(ticks | _CS_KIND_UTC)
+        self.write_i64(now_cs_ticks())
 
     def write_vec(self, items, fn):
         self.write_i32(len(items))
