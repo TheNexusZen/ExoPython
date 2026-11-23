@@ -287,7 +287,7 @@ def refresh_hud():
         )
         .set_text(
             turn_banner,
-            turn_str + "  |  Move: " + exovar.str_from_int(move_number),
+            turn_str + "  |  Move: " + exovar.to_str(move_number),
         )
         .set_text(status_footer, status_str)
     )
